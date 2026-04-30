@@ -1,0 +1,10 @@
+# clippy.toml — custom lint configuration for PageCutter2
+
+# Disallow certain patterns project-wide
+disallowed-methods = []
+
+# Relax some pedantic lints that are noisy in GTK/glib code
+allow-unwrap-in-tests = true
+
+# Minimum applicable lint levels
+# (enforced via `cargo clippy -- -D warnings` in CI)

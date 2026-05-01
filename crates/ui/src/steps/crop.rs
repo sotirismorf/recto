@@ -397,6 +397,21 @@ impl CropPicker {
         let Some(img_pos) = self.widget_to_image(x, y) else { return };
         let (z, _, _) = self.canvas.transform();
         let mut s = self.state.borrow_mut();
+
+        let locked = s
+            .binding
+            .as_ref()
+            .map(|(state, index)| {
+                let p = state.borrow();
+                p.pages
+                    .get(*index)
+                    .and_then(|pg| pg.crop_preset)
+                    .and_then(|pi| p.crop_presets.get(pi))
+                    .map(|pr| pr.locked)
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+
         let handle = match s.crop {
             Some(r) => Handle::pick(r, img_pos, z).unwrap_or(if r.contains(img_pos) {
                 Handle::Move
@@ -405,6 +420,12 @@ impl CropPicker {
             }),
             None => Handle::NewBox,
         };
+
+        // Locked preset: only allow repositioning, not resizing or new boxes.
+        if locked && !matches!(handle, Handle::Move) {
+            return;
+        }
+
         s.drag = Some(DragState {
             handle,
             initial: s.crop,
@@ -452,21 +473,35 @@ impl CropPicker {
             self.area.set_cursor(None);
             return;
         };
-        let rect = match self.state.borrow().crop {
+        let s = self.state.borrow();
+        let rect = match s.crop {
             Some(r) => r,
             None => {
                 self.area.set_cursor(None);
                 return;
             }
         };
+        let locked = s
+            .binding
+            .as_ref()
+            .map(|(state, index)| {
+                let p = state.borrow();
+                p.pages
+                    .get(*index)
+                    .and_then(|pg| pg.crop_preset)
+                    .and_then(|pi| p.crop_presets.get(pi))
+                    .map(|pr| pr.locked)
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        drop(s);
         let (z, _, _) = self.canvas.transform();
-        let h = Handle::pick(rect, img_pos, z).or_else(|| {
-            if rect.contains(img_pos) {
-                Some(Handle::Move)
-            } else {
-                None
-            }
-        });
+        let h = if locked {
+            if rect.contains(img_pos) { Some(Handle::Move) } else { None }
+        } else {
+            Handle::pick(rect, img_pos, z)
+                .or_else(|| if rect.contains(img_pos) { Some(Handle::Move) } else { None })
+        };
         let cursor = h.and_then(|h| gdk::Cursor::from_name(h.cursor_name(), None));
         self.area.set_cursor(cursor.as_ref());
     }

@@ -16,6 +16,8 @@ kamadak-exif = "0.6"
 rayon.workspace = true
 
 opencv = { version = "0.98", optional = true, default-features = false, features = ["imgproc", "imgcodecs"] }
+pdf-writer = "0.14"
+dirs = "5"
 
 [features]
 default = []

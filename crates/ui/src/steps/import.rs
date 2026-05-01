@@ -92,6 +92,12 @@ pub fn build(state: State, page_store: gio::ListStore) -> gtk::Widget {
         .build();
     add_btn.add_css_class("suggested-action");
 
+    let open_project_btn = gtk::Button::builder()
+        .label("Open Project…")
+        .icon_name("document-open-symbolic")
+        .tooltip_text("Open a saved .pcut project file")
+        .build();
+
     let spinner = gtk::Spinner::builder().visible(false).build();
 
     let rotate_ccw = gtk::Button::builder()
@@ -123,6 +129,7 @@ pub fn build(state: State, page_store: gio::ListStore) -> gtk::Widget {
         .build();
 
     toolbar.append(&add_btn);
+    toolbar.append(&open_project_btn);
     toolbar.append(&gtk::Separator::new(gtk::Orientation::Vertical));
     toolbar.append(&rotate_ccw);
     toolbar.append(&rotate_cw);
@@ -234,6 +241,98 @@ use rayon::prelude::*;
             });
         }
     );
+
+    // Loads a complete saved project: resets state+store, creates placeholders
+    // with the saved rotation already applied, then loads thumbnails.
+    let start_loading_project = glib::clone!(
+        #[weak] store,
+        #[strong] state,
+        #[weak] count,
+        #[weak] spinner,
+        #[strong] pending_tasks,
+        #[strong] tx,
+        move |project: pagecutter_core::project::Project| {
+            store.remove_all();
+            let pages_info: Vec<(usize, PathBuf, u32)> = project
+                .pages
+                .iter()
+                .enumerate()
+                .map(|(i, p)| (i, p.path.clone(), p.rotation as u32))
+                .collect();
+            *state.borrow_mut() = project;
+
+            for (_, path, rotation) in &pages_info {
+                let item = PageItem::new_placeholder(path.clone());
+                item.set_rotation(*rotation);
+                store.append(&item);
+            }
+            update_count(&count, &state);
+
+            if pages_info.is_empty() { return; }
+
+            pending_tasks.set(pending_tasks.get() + pages_info.len());
+            spinner.set_visible(true);
+            spinner.start();
+
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                pages_info.into_par_iter().for_each(|(index, path, _rotation)| {
+                    let file_dims = gdk_pixbuf::Pixbuf::file_info(&path)
+                        .map(|(_, w, h)| (w as u32, h as u32))
+                        .unwrap_or((0, 0));
+                    if let Ok(pb) = gdk_pixbuf::Pixbuf::from_file_at_scale(&path, 256, 256, true) {
+                        let pb = pb.apply_embedded_orientation().unwrap_or(pb);
+                        let (orig_width, orig_height) =
+                            exif_corrected_dims(file_dims, pb.width(), pb.height());
+                        let bytes = pb.read_pixel_bytes();
+                        let data = ThumbData {
+                            bytes,
+                            width: pb.width(),
+                            height: pb.height(),
+                            rowstride: pb.rowstride(),
+                            has_alpha: pb.has_alpha(),
+                            orig_width,
+                            orig_height,
+                        };
+                        let _ = tx.send_blocking(LoadMsg::Progress(index, data));
+                    }
+                    let _ = tx.send_blocking(LoadMsg::Finished);
+                });
+            });
+        }
+    );
+
+    open_project_btn.connect_clicked(glib::clone!(
+        #[strong] start_loading_project,
+        move |btn| {
+            let dialog = gtk::FileDialog::builder()
+                .title("Open Project")
+                .modal(true)
+                .build();
+            let filter = gtk::FileFilter::new();
+            filter.set_name(Some("pagecutter project (*.pcut)"));
+            filter.add_pattern("*.pcut");
+            let filters = gio::ListStore::new::<gtk::FileFilter>();
+            filters.append(&filter);
+            dialog.set_filters(Some(&filters));
+            let parent = btn.root().and_downcast::<gtk::Window>();
+            dialog.open(
+                parent.as_ref(),
+                gio::Cancellable::NONE,
+                glib::clone!(
+                    #[strong] start_loading_project,
+                    move |result| {
+                        let Ok(file) = result else { return };
+                        let Some(path) = file.path() else { return };
+                        match pagecutter_core::project::load_project(&path) {
+                            Ok(project) => start_loading_project(project),
+                            Err(e) => tracing::error!("open project: {e}"),
+                        }
+                    }
+                ),
+            );
+        }
+    ));
 
     // Preview surface: a custom widget that renders a gdk::Texture via GPU.
     let preview = crate::widgets::preview_canvas::PreviewCanvas::new();

@@ -618,6 +618,7 @@ impl CropPicker {
 pub fn build(
     state: State,
     page_store: gio::ListStore,
+    selection: gtk::MultiSelection,
     paned_sync: super::PanedSync,
     mark_dirty: MarkDirty,
 ) -> gtk::Widget {
@@ -664,141 +665,33 @@ pub fn build(
     let selected_indices: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(Vec::new()));
     let overlays: Rc<RefCell<Vec<glib::WeakRef<gtk::DrawingArea>>>> = Rc::new(RefCell::new(Vec::new()));
 
-    let selection = gtk::MultiSelection::new(Some(page_store.clone().upcast::<gio::ListModel>()));
-
-    let factory = gtk::SignalListItemFactory::new();
-    factory.connect_setup({
-        let overlays = overlays.clone();
-        move |_, list_item| {
-            let item = list_item
-                .downcast_ref::<gtk::ListItem>()
-                .expect("SignalListItemFactory must provide gtk::ListItem");
-            let card = gtk::Box::builder()
-                .orientation(gtk::Orientation::Vertical)
-                .spacing(4)
-                .halign(gtk::Align::Center)
-                .valign(gtk::Align::Start)
-                .hexpand(false)
-                .vexpand(false)
-                .build();
-            let overlay = gtk::Overlay::builder()
-                .halign(gtk::Align::Center)
-                .valign(gtk::Align::Center)
-                .hexpand(false)
-                .vexpand(false)
-                .build();
-            // gtk::Image with pixel_size clamps its natural size to a fixed
-            // square — unlike gtk::Picture, whose natural size grows with the
-            // paintable. That keeps cells stable and matches the import grid.
-            let pic = gtk::Image::builder()
-                .pixel_size(150)
-                .halign(gtk::Align::Center)
-                .valign(gtk::Align::Center)
-                .build();
-            overlay.set_child(Some(&pic));
-            let da = gtk::DrawingArea::builder()
-                .can_target(false)
-                .hexpand(true)
-                .vexpand(true)
-                .build();
-            overlay.add_overlay(&da);
-            {
-                let w = glib::WeakRef::new();
-                w.set(Some(&da));
-                overlays.borrow_mut().push(w);
-            }
-            let lbl = gtk::Label::builder()
-                .ellipsize(gtk::pango::EllipsizeMode::End)
-                .max_width_chars(18)
-                .css_classes(["caption"])
-                .build();
-            card.append(&overlay);
-            card.append(&lbl);
-            item.set_child(Some(&card));
-        }
-    });
-    factory.connect_bind({
+    let factory = super::grid::overlay_factory({
         let state = state.clone();
         let store = page_store.clone();
         let overlays = overlays.clone();
-        move |_, list_item| {
-            let item = list_item
-                .downcast_ref::<gtk::ListItem>()
-                .expect("SignalListItemFactory must provide gtk::ListItem");
-            let page: PageItem = item
-                .item()
-                .and_downcast()
-                .expect("ListStore item must be PageItem");
-            let card: gtk::Box = item.child().and_downcast().expect("child must be gtk::Box");
-            let overlay: gtk::Overlay = card.first_child().and_downcast().expect("first child must be gtk::Overlay");
-            let pic: gtk::Image = overlay.first_child().and_downcast().expect("overlay child must be gtk::Image");
-            let lbl: gtk::Label = overlay.next_sibling().and_downcast().expect("next sibling must be gtk::Label");
-
-            let b1 = page
-                .bind_property("thumbnail", &pic, "paintable")
-                .sync_create()
-                .build();
-            let b2 = page
-                .bind_property("filename", &lbl, "label")
-                .sync_create()
-                .build();
-            // SAFETY: set_data stores glib::Binding references under unique
-            // keys that no other code uses. The bindings are tied to this
-            // ListItem's lifetime: they are cleaned up in connect_unbind below
-            // which GTK guarantees is called exactly once before the item is
-            // recycled or dropped.
-            unsafe {
-                item.set_data("__b_thumb", b1);
-                item.set_data("__b_label", b2);
-            }
-
-            // Connect setup pushes to overlays list immediately before bind
-            // fires for the same item, so the last entry is this item's DA.
-            let pos = item.position() as usize;
+        move |pos, da| {
+            // Per-bind: install a draw_func capturing this card's current
+            // page index, and register the DrawingArea so the preset toolbar
+            // can redraw every visible thumbnail when presets change.
             let st = state.clone();
             let sto = store.clone();
-            if let Some(da) = overlays.borrow().last().and_then(|w| w.upgrade()) {
-                da.set_draw_func(move |_, cr, width, height| {
-                    draw_crop_overlay(cr, width as f64, height as f64, &st, &sto, pos);
-                });
+            da.set_draw_func(move |_, cr, width, height| {
+                draw_crop_overlay(cr, width as f64, height as f64, &st, &sto, pos);
+            });
+            let mut list = overlays.borrow_mut();
+            list.retain(|w| w.upgrade().is_some());
+            let da_ptr = da.as_ptr() as usize;
+            let already = list.iter().any(|w| {
+                w.upgrade().map(|x| x.as_ptr() as usize == da_ptr).unwrap_or(false)
+            });
+            if !already {
+                let w = glib::WeakRef::new();
+                w.set(Some(da));
+                list.push(w);
             }
         }
     });
-    factory.connect_unbind(|_, list_item| {
-        let item = list_item
-            .downcast_ref::<gtk::ListItem>()
-            .expect("SignalListItemFactory must provide gtk::ListItem");
-        // SAFETY: steal_data takes ownership of the raw pointer stored by
-        // set_data in connect_bind. connect_unbind fires exactly once per
-        // item, so the pointer is valid and will not be accessed again.
-        unsafe {
-            if let Some(b) = item.steal_data::<glib::Binding>("__b_thumb") {
-                b.unbind();
-            }
-            if let Some(b) = item.steal_data::<glib::Binding>("__b_label") {
-                b.unbind();
-            }
-        }
-    });
-
-    let grid_view = gtk::GridView::builder()
-        .model(&selection)
-        .factory(&factory)
-        .min_columns(1)
-        .max_columns(8)
-        .enable_rubberband(true)
-        .vexpand(true)
-        .hexpand(true)
-        .build();
-    grid_view.add_css_class("photo-grid");
-
-    let provider = gtk::CssProvider::new();
-    provider.load_from_string(".photo-grid > child { border-radius: 8px; }");
-    gtk::style_context_add_provider_for_display(
-        &gdk::Display::default().expect("display must be available"),
-        &provider,
-        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
+    let (_grid_view, grid_scroll) = super::grid::build_grid_scroll(&selection, &factory);
 
     // Preset chip styles.
     let preset_css = gtk::CssProvider::new();
@@ -852,12 +745,6 @@ pub fn build(
         &preset_css,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
-
-    let grid_scroll = gtk::ScrolledWindow::builder()
-        .child(&grid_view)
-        .vexpand(true)
-        .hexpand(true)
-        .build();
 
     // --- Paned: left = crop preview + toolbar, right = grid -------------
     let left = gtk::Box::builder()
@@ -1001,6 +888,7 @@ pub fn build(
         let store = page_store.clone();
         let chips = preset_chips.clone();
         let selection = selection.clone();
+        let sl = status_lbl.clone();
         let initialised = initialised.clone();
         let p = picker_rc.clone();
         let ci = current_index.clone();
@@ -1008,14 +896,39 @@ pub fn build(
         let sel_indices = si.clone();
         let mark_dirty = mark_dirty.clone();
         move |_| {
-            if initialised.get() {
-                return;
+            if !initialised.get() {
+                initialised.set(true);
+                auto_detect_presets(&state, &store);
+                refresh_preset_chips(&chips, &state, ci.clone(), &p, &ov, &sel_indices, &mark_dirty);
             }
-            initialised.set(true);
-            auto_detect_presets(&state, &store);
-            refresh_preset_chips(&chips, &state, ci.clone(), &p, &ov, &sel_indices, &mark_dirty);
-            if store.n_items() > 0 {
-                selection.select_item(0, true);
+            // Sync the picker to the current shared selection, so re-entering
+            // this tab reflects whatever was selected on import/colors. Auto-
+            // pick the first page only if nothing is selected yet.
+            let bs = selection.selection();
+            let first = match gtk::BitsetIter::init_first(&bs) {
+                Some((_, idx)) => Some(idx),
+                None => {
+                    if store.n_items() > 0 {
+                        selection.select_item(0, true);
+                        Some(0)
+                    } else {
+                        None
+                    }
+                }
+            };
+            match first {
+                Some(idx) => {
+                    ci.set(idx as i32);
+                    p.bind(state.clone(), idx as usize);
+                    refresh_preset_chips(&chips, &state, ci.clone(), &p, &ov, &sel_indices, &mark_dirty);
+                    update_status_label(&sl, &state, idx as i32);
+                }
+                None => {
+                    ci.set(-1);
+                    p.clear();
+                    refresh_preset_chips(&chips, &state, ci.clone(), &p, &ov, &sel_indices, &mark_dirty);
+                    update_status_label(&sl, &state, -1);
+                }
             }
         }
     });

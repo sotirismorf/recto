@@ -11,6 +11,10 @@ pub fn build(app: &adw::Application) {
     let state: State = new_state();
     let session = Session::new(state.clone());
     let page_store = new_store();
+    // Shared selection — every tab's grid view models on the same selection,
+    // so picking pages on import carries over to crop and colors.
+    let selection =
+        gtk::MultiSelection::new(Some(page_store.clone().upcast::<gio::ListModel>()));
     let paned_sync = steps::PanedSync::new();
 
     let mark_dirty: MarkDirty = {
@@ -202,6 +206,7 @@ pub fn build(app: &adw::Application) {
         &steps::import::build(
             state.clone(),
             page_store.clone(),
+            selection.clone(),
             paned_sync.clone(),
             load_env,
             Rc::clone(&load_images),
@@ -216,6 +221,7 @@ pub fn build(app: &adw::Application) {
         &steps::crop::build(
             state.clone(),
             page_store.clone(),
+            selection.clone(),
             paned_sync.clone(),
             Rc::clone(&mark_dirty),
         ),
@@ -226,7 +232,7 @@ pub fn build(app: &adw::Application) {
     work_stack.add_titled_with_icon(
         &steps::colors::build(
             state.clone(),
-            page_store.clone(),
+            selection.clone(),
             paned_sync.clone(),
             Rc::clone(&mark_dirty),
         ),

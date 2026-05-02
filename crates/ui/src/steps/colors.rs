@@ -3,9 +3,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use gtk::prelude::*;
-use gtk::{gdk, gdk_pixbuf, gio, glib};
+use gtk::{gdk, gdk_pixbuf, glib};
 
-use super::page_item::PageItem;
 use crate::app::{MarkDirty, State};
 use crate::widgets::preview_canvas::PreviewCanvas;
 use crate::widgets::zoom_pan::{ZoomPanConfig, ZoomPanController};
@@ -31,7 +30,7 @@ struct ColorResult {
 
 pub fn build(
     state: State,
-    page_store: gio::ListStore,
+    selection: gtk::MultiSelection,
     paned_sync: super::PanedSync,
     mark_dirty: MarkDirty,
 ) -> gtk::Widget {
@@ -109,76 +108,8 @@ pub fn build(
         },
     );
 
-    let selection = gtk::MultiSelection::new(Some(page_store.clone().upcast::<gio::ListModel>()));
-
-    let factory = gtk::SignalListItemFactory::new();
-    factory.connect_setup(|_, list_item| {
-        let item = list_item
-            .downcast_ref::<gtk::ListItem>()
-            .expect("SignalListItemFactory must provide gtk::ListItem");
-        let card = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(4)
-            .halign(gtk::Align::Center)
-            .valign(gtk::Align::Start)
-            .hexpand(false)
-            .vexpand(false)
-            .build();
-        let pic = gtk::Image::builder()
-            .pixel_size(150)
-            .halign(gtk::Align::Center)
-            .valign(gtk::Align::Center)
-            .build();
-        let lbl = gtk::Label::builder()
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .max_width_chars(18)
-            .css_classes(["caption"])
-            .build();
-        card.append(&pic);
-        card.append(&lbl);
-        item.set_child(Some(&card));
-    });
-    factory.connect_bind(|_, list_item| {
-        let item = list_item
-            .downcast_ref::<gtk::ListItem>()
-            .expect("SignalListItemFactory must provide gtk::ListItem");
-        let page: PageItem = item.item().and_downcast().expect("item must be PageItem");
-        let card: gtk::Box = item.child().and_downcast().expect("child must be Box");
-        let pic: gtk::Image = card.first_child().and_downcast().expect("first child must be Image");
-        let lbl: gtk::Label = pic.next_sibling().and_downcast().expect("sibling must be Label");
-        let b1 = page.bind_property("thumbnail", &pic, "paintable").sync_create().build();
-        let b2 = page.bind_property("filename", &lbl, "label").sync_create().build();
-        unsafe {
-            item.set_data("__b_thumb", b1);
-            item.set_data("__b_label", b2);
-        }
-    });
-    factory.connect_unbind(|_, list_item| {
-        let item = list_item
-            .downcast_ref::<gtk::ListItem>()
-            .expect("SignalListItemFactory must provide gtk::ListItem");
-        unsafe {
-            if let Some(b) = item.steal_data::<glib::Binding>("__b_thumb") { b.unbind(); }
-            if let Some(b) = item.steal_data::<glib::Binding>("__b_label") { b.unbind(); }
-        }
-    });
-
-    let grid_view = gtk::GridView::builder()
-        .model(&selection)
-        .factory(&factory)
-        .min_columns(1)
-        .max_columns(8)
-        .enable_rubberband(true)
-        .vexpand(true)
-        .hexpand(true)
-        .build();
-    grid_view.add_css_class("photo-grid");
-
-    let grid_scroll = gtk::ScrolledWindow::builder()
-        .child(&grid_view)
-        .vexpand(true)
-        .hexpand(true)
-        .build();
+    let factory = super::grid::simple_factory();
+    let (_grid_view, grid_scroll) = super::grid::build_grid_scroll(&selection, &factory);
 
     let left = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)

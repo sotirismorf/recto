@@ -1,6 +1,7 @@
 pub mod colors;
 pub mod crop;
 pub mod export;
+pub mod grid;
 pub mod import;
 pub mod page_item;
 pub mod start;

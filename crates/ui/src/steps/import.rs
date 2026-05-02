@@ -46,6 +46,7 @@ pub struct LoadEnv {
 pub fn build(
     state: State,
     page_store: gio::ListStore,
+    selection: gtk::MultiSelection,
     paned_sync: super::PanedSync,
     env: LoadEnv,
     load_images: Rc<dyn Fn(Vec<PathBuf>)>,
@@ -54,7 +55,6 @@ pub fn build(
 ) -> gtk::Widget {
     let LoadEnv { spinner, count } = env;
     let store = page_store;
-    let selection = gtk::MultiSelection::new(Some(store.clone()));
 
     let (tx_prev, rx_prev) = async_channel::unbounded::<(u64, PathBuf, u32)>();
     let (tx_prev_res, rx_prev_res) = async_channel::unbounded::<(u64, ThumbData)>();
@@ -184,114 +184,8 @@ pub fn build(
         }
     });
 
-    const THUMB_PX: i32 = 150;
-    const CARD_CHARS: i32 = 18;
-
-    let factory = gtk::SignalListItemFactory::new();
-    factory.connect_setup(|_, list_item| {
-        let item = list_item
-            .downcast_ref::<gtk::ListItem>()
-            .expect("SignalListItemFactory must provide gtk::ListItem");
-        let card = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(4)
-            .halign(gtk::Align::Center)
-            .valign(gtk::Align::Start)
-            .hexpand(false)
-            .vexpand(false)
-            .build();
-        // gtk::Image with pixel_size clamps its natural size to a fixed
-        // square — unlike gtk::Picture, whose natural size grows with the
-        // paintable. That keeps cells stable and lets only the inter-card
-        // gap fluctuate as the grid reflows columns.
-        let pic = gtk::Image::builder()
-            .pixel_size(THUMB_PX)
-            .halign(gtk::Align::Center)
-            .valign(gtk::Align::Center)
-            .build();
-        let lbl = gtk::Label::builder()
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .max_width_chars(CARD_CHARS)
-            .width_chars(CARD_CHARS)
-            .css_classes(["caption"])
-            .build();
-        card.append(&pic);
-        card.append(&lbl);
-        item.set_child(Some(&card));
-    });
-    factory.connect_bind(|_, list_item| {
-        let item = list_item
-            .downcast_ref::<gtk::ListItem>()
-            .expect("SignalListItemFactory must provide gtk::ListItem");
-        let page: PageItem = item
-            .item()
-            .and_downcast()
-            .expect("ListStore item must be PageItem");
-        let card: gtk::Box = item.child().and_downcast().expect("child must be gtk::Box");
-        let pic: gtk::Image = card.first_child().and_downcast().expect("first child must be gtk::Image");
-        let lbl: gtk::Label = pic.next_sibling().and_downcast().expect("next sibling must be gtk::Label");
-
-        let b1 = page
-            .bind_property("thumbnail", &pic, "paintable")
-            .sync_create()
-            .build();
-        let b2 = page
-            .bind_property("filename", &lbl, "label")
-            .sync_create()
-            .build();
-        // SAFETY: set_data stores glib::Binding references under unique
-        // keys that no other code uses. The bindings are tied to this
-        // ListItem's lifetime: they are cleaned up in connect_unbind below
-        // which GTK guarantees is called exactly once before the item is
-        // recycled or dropped.
-        unsafe {
-            item.set_data("__b_thumb", b1);
-            item.set_data("__b_label", b2);
-        }
-    });
-    factory.connect_unbind(|_, list_item| {
-        let item = list_item
-            .downcast_ref::<gtk::ListItem>()
-            .expect("SignalListItemFactory must provide gtk::ListItem");
-        // SAFETY: steal_data takes ownership of the raw pointer stored by
-        // set_data in connect_bind. connect_unbind fires exactly once per
-        // item, so the pointer is valid and will not be accessed again.
-        unsafe {
-            if let Some(b) = item.steal_data::<glib::Binding>("__b_thumb") {
-                b.unbind();
-            }
-            if let Some(b) = item.steal_data::<glib::Binding>("__b_label") {
-                b.unbind();
-            }
-        }
-    });
-
-    let grid_view = gtk::GridView::builder()
-        .model(&selection)
-        .factory(&factory)
-        .min_columns(1)
-        .max_columns(8)
-        .enable_rubberband(true)
-        .vexpand(true)
-        .hexpand(true)
-        .build();
-    grid_view.add_css_class("photo-grid");
-
-    let provider = gtk::CssProvider::new();
-    provider.load_from_string(
-        ".photo-grid > child { margin: 6px; padding: 8px; border-radius: 8px; }",
-    );
-    gtk::style_context_add_provider_for_display(
-        &gdk::Display::default().expect("display must be available"),
-        &provider,
-        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
-
-    let grid_scroll = gtk::ScrolledWindow::builder()
-        .child(&grid_view)
-        .vexpand(true)
-        .hexpand(true)
-        .build();
+    let factory = super::grid::simple_factory();
+    let (_grid_view, grid_scroll) = super::grid::build_grid_scroll(&selection, &factory);
 
     let click_gesture = gtk::GestureClick::builder().build();
     click_gesture.connect_pressed(glib::clone!(

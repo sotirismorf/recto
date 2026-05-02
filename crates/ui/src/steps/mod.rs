@@ -3,6 +3,7 @@ pub mod crop;
 pub mod export;
 pub mod import;
 pub mod page_item;
+pub mod start;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;

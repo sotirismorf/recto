@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
 authors = ["Sotiris Morfakidis"]
-description = "Recto — The powerful post-processor for book scanning"
+description = "Recto — The powerful book scanning post-processor"
 
 [workspace.dependencies]
 anyhow = "1"

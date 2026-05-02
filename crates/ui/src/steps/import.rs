@@ -4,7 +4,7 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-fn exif_corrected_dims(file_dims: (u32, u32), thumb_w: i32, thumb_h: i32) -> (u32, u32) {
+pub(crate) fn exif_corrected_dims(file_dims: (u32, u32), thumb_w: i32, thumb_h: i32) -> (u32, u32) {
     let (fw, fh) = file_dims;
     if fw == 0 || fh == 0 || thumb_w == 0 || thumb_h == 0 {
         return file_dims;
@@ -21,29 +21,39 @@ fn exif_corrected_dims(file_dims: (u32, u32), thumb_w: i32, thumb_h: i32) -> (u3
 use super::page_item::PageItem;
 use crate::app::State;
 use crate::widgets::zoom_pan::{ZoomPanConfig, ZoomPanController};
-use recto_core::project::Page;
+use recto_core::project::Project;
 
-struct ThumbData {
-    bytes: glib::Bytes,
-    width: i32,
-    height: i32,
-    rowstride: i32,
-    has_alpha: bool,
-    orig_width: u32,
-    orig_height: u32,
+pub struct ThumbData {
+    pub bytes: glib::Bytes,
+    pub width: i32,
+    pub height: i32,
+    pub rowstride: i32,
+    pub has_alpha: bool,
+    pub orig_width: u32,
+    pub orig_height: u32,
 }
 
-enum LoadMsg {
+pub enum LoadMsg {
     Progress(usize, ThumbData),
     Finished,
 }
 
-pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedSync) -> gtk::Widget {
+pub struct LoadEnv {
+    pub spinner: gtk::Spinner,
+    pub count: gtk::Label,
+}
+
+pub fn build(
+    state: State,
+    page_store: gio::ListStore,
+    paned_sync: super::PanedSync,
+    env: LoadEnv,
+    load_images: Rc<dyn Fn(Vec<PathBuf>)>,
+    load_project: Rc<dyn Fn(Project)>,
+) -> gtk::Widget {
+    let LoadEnv { spinner, count } = env;
     let store = page_store;
     let selection = gtk::MultiSelection::new(Some(store.clone()));
-
-    let pending_tasks = Rc::new(Cell::new(0));
-    let (tx, rx) = async_channel::unbounded::<LoadMsg>();
 
     let (tx_prev, rx_prev) = async_channel::unbounded::<(u64, PathBuf, u32)>();
     let (tx_prev_res, rx_prev_res) = async_channel::unbounded::<(u64, ThumbData)>();
@@ -98,8 +108,6 @@ pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedS
         .tooltip_text("Open a saved .pcut project file")
         .build();
 
-    let spinner = gtk::Spinner::builder().visible(false).build();
-
     let rotate_ccw = gtk::Button::builder()
         .icon_name("object-rotate-left-symbolic")
         .tooltip_text("Rotate selected 90° counter-clockwise")
@@ -124,10 +132,6 @@ pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedS
 
     let spacer = gtk::Box::builder().hexpand(true).build();
 
-    let count = gtk::Label::builder()
-        .label("0 images")
-        .build();
-
     toolbar.append(&add_btn);
     toolbar.append(&open_project_btn);
     toolbar.append(&gtk::Separator::new(gtk::Orientation::Vertical));
@@ -139,200 +143,6 @@ pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedS
     toolbar.append(&spacer);
     toolbar.append(&spinner);
     toolbar.append(&count);
-
-    glib::MainContext::default().spawn_local(glib::clone!(
-        #[weak]
-        store,
-        #[weak]
-        spinner,
-        #[strong]
-        pending_tasks,
-        async move {
-            while let Ok(msg) = rx.recv().await {
-                match msg {
-                    LoadMsg::Progress(index, data) => {
-                        let pb = gdk_pixbuf::Pixbuf::from_bytes(
-                            &data.bytes,
-                            gdk_pixbuf::Colorspace::Rgb,
-                            data.has_alpha,
-                            8,
-                            data.width,
-                            data.height,
-                            data.rowstride,
-                        );
-                        if let Some(item) = store.item(index as u32).and_downcast::<PageItem>() {
-                            item.set_image(pb);
-                            item.set_dims(data.orig_width, data.orig_height);
-                        }
-                    }
-                    LoadMsg::Finished => {
-                        decrement_pending(&pending_tasks, &spinner);
-                    }
-                }
-            }
-        }
-    ));
-
-use rayon::prelude::*;
-
-    let start_loading = glib::clone!(
-        #[weak] store,
-        #[strong] state,
-        #[weak] count,
-        #[weak] spinner,
-        #[strong] pending_tasks,
-        #[strong] tx,
-        move |paths: Vec<PathBuf>| {
-            if paths.is_empty() { return; }
-            
-            let start_index = store.n_items() as usize;
-
-            for path in &paths {
-                let item = PageItem::new_placeholder(path.clone());
-                store.append(&item);
-                state.borrow_mut().pages.push(Page {
-                    path: path.clone(),
-                    rotation: 0,
-                    crop: None,
-                    crop_preset: None,
-                    output: None,
-                });
-            }
-            update_count(&count, &state);
-
-            pending_tasks.set(pending_tasks.get() + paths.len());
-            spinner.set_visible(true);
-            spinner.start();
-
-            let paths_with_indices: Vec<(usize, PathBuf)> = paths
-                .into_iter()
-                .enumerate()
-                .map(|(i, p)| (start_index + i, p))
-                .collect();
-
-            let tx = tx.clone();
-            std::thread::spawn(move || {
-                let total_start = std::time::Instant::now();
-                paths_with_indices.into_par_iter().for_each(|(index, path)| {
-                    // Read original image dimensions from the file header
-                    // (non-decoding, fast) so crop auto-detection uses real
-                    // sizes, not the 256 px thumbnail dimensions.
-                    let file_dims = gdk_pixbuf::Pixbuf::file_info(&path)
-                        .map(|(_, w, h)| (w as u32, h as u32))
-                        .unwrap_or((0, 0));
-                    if let Ok(pb) = gdk_pixbuf::Pixbuf::from_file_at_scale(&path, 256, 256, true) {
-                        let pb = pb.apply_embedded_orientation().unwrap_or(pb);
-                        let (orig_width, orig_height) = exif_corrected_dims(file_dims, pb.width(), pb.height());
-                        let bytes = pb.read_pixel_bytes();
-                        let data = ThumbData {
-                            bytes,
-                            width: pb.width(),
-                            height: pb.height(),
-                            rowstride: pb.rowstride(),
-                            has_alpha: pb.has_alpha(),
-                            orig_width,
-                            orig_height,
-                        };
-                        let _ = tx.send_blocking(LoadMsg::Progress(index, data));
-                    }
-                    let _ = tx.send_blocking(LoadMsg::Finished);
-                });
-                tracing::info!(elapsed = ?total_start.elapsed(), "all thumbnails loaded");
-            });
-        }
-    );
-
-    // Loads a complete saved project: resets state+store, creates placeholders
-    // with the saved rotation already applied, then loads thumbnails.
-    let start_loading_project = glib::clone!(
-        #[weak] store,
-        #[strong] state,
-        #[weak] count,
-        #[weak] spinner,
-        #[strong] pending_tasks,
-        #[strong] tx,
-        move |project: recto_core::project::Project| {
-            store.remove_all();
-            let pages_info: Vec<(usize, PathBuf, u32)> = project
-                .pages
-                .iter()
-                .enumerate()
-                .map(|(i, p)| (i, p.path.clone(), p.rotation as u32))
-                .collect();
-            *state.borrow_mut() = project;
-
-            for (_, path, rotation) in &pages_info {
-                let item = PageItem::new_placeholder(path.clone());
-                item.set_rotation(*rotation);
-                store.append(&item);
-            }
-            update_count(&count, &state);
-
-            if pages_info.is_empty() { return; }
-
-            pending_tasks.set(pending_tasks.get() + pages_info.len());
-            spinner.set_visible(true);
-            spinner.start();
-
-            let tx = tx.clone();
-            std::thread::spawn(move || {
-                pages_info.into_par_iter().for_each(|(index, path, _rotation)| {
-                    let file_dims = gdk_pixbuf::Pixbuf::file_info(&path)
-                        .map(|(_, w, h)| (w as u32, h as u32))
-                        .unwrap_or((0, 0));
-                    if let Ok(pb) = gdk_pixbuf::Pixbuf::from_file_at_scale(&path, 256, 256, true) {
-                        let pb = pb.apply_embedded_orientation().unwrap_or(pb);
-                        let (orig_width, orig_height) =
-                            exif_corrected_dims(file_dims, pb.width(), pb.height());
-                        let bytes = pb.read_pixel_bytes();
-                        let data = ThumbData {
-                            bytes,
-                            width: pb.width(),
-                            height: pb.height(),
-                            rowstride: pb.rowstride(),
-                            has_alpha: pb.has_alpha(),
-                            orig_width,
-                            orig_height,
-                        };
-                        let _ = tx.send_blocking(LoadMsg::Progress(index, data));
-                    }
-                    let _ = tx.send_blocking(LoadMsg::Finished);
-                });
-            });
-        }
-    );
-
-    open_project_btn.connect_clicked(glib::clone!(
-        #[strong] start_loading_project,
-        move |btn| {
-            let dialog = gtk::FileDialog::builder()
-                .title("Open Project")
-                .modal(true)
-                .build();
-            let filter = gtk::FileFilter::new();
-            filter.set_name(Some("Recto project (*.pcut)"));
-            filter.add_pattern("*.pcut");
-            let filters = gio::ListStore::new::<gtk::FileFilter>();
-            filters.append(&filter);
-            dialog.set_filters(Some(&filters));
-            let parent = btn.root().and_downcast::<gtk::Window>();
-            dialog.open(
-                parent.as_ref(),
-                gio::Cancellable::NONE,
-                glib::clone!(
-                    #[strong] start_loading_project,
-                    move |result| {
-                        let Ok(file) = result else { return };
-                        let Some(path) = file.path() else { return };
-                        match recto_core::project::load_project(&path) {
-                            Ok(project) => start_loading_project(project),
-                            Err(e) => tracing::error!("open project: {e}"),
-                        }
-                    }
-                ),
-            );
-        }
-    ));
 
     // Preview surface: a custom widget that renders a gdk::Texture via GPU.
     let preview = crate::widgets::preview_canvas::PreviewCanvas::new();
@@ -540,7 +350,7 @@ use rayon::prelude::*;
 
     add_btn.connect_clicked(glib::clone!(
         #[strong]
-        start_loading,
+        load_images,
         move |btn| {
             let dialog = gtk::FileDialog::builder()
                 .title("Add page images")
@@ -567,7 +377,7 @@ use rayon::prelude::*;
                 gio::Cancellable::NONE,
                 glib::clone!(
                     #[strong]
-                    start_loading,
+                    load_images,
                     move |result| {
                         let Ok(files) = result else { return };
                         let mut paths = Vec::new();
@@ -579,7 +389,7 @@ use rayon::prelude::*;
                                 paths.push(path);
                             }
                         }
-                        start_loading(paths);
+                        load_images(paths);
                     }
                 ),
             );
@@ -589,7 +399,7 @@ use rayon::prelude::*;
     let drop = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
     drop.connect_drop(glib::clone!(
         #[strong]
-        start_loading,
+        load_images,
         move |_, value, _, _| {
             let Ok(file_list) = value.get::<gdk::FileList>() else {
                 return false;
@@ -600,11 +410,45 @@ use rayon::prelude::*;
                     paths.push(path);
                 }
             }
-            start_loading(paths);
+            load_images(paths);
             true
         }
     ));
     paned.add_controller(drop);
+
+    open_project_btn.connect_clicked(glib::clone!(
+        #[strong]
+        load_project,
+        move |btn| {
+            let dialog = gtk::FileDialog::builder()
+                .title("Open Project")
+                .modal(true)
+                .build();
+            let filter = gtk::FileFilter::new();
+            filter.set_name(Some("Recto project (*.pcut)"));
+            filter.add_pattern("*.pcut");
+            let filters = gio::ListStore::new::<gtk::FileFilter>();
+            filters.append(&filter);
+            dialog.set_filters(Some(&filters));
+            let parent = btn.root().and_downcast::<gtk::Window>();
+            dialog.open(
+                parent.as_ref(),
+                gio::Cancellable::NONE,
+                glib::clone!(
+                    #[strong]
+                    load_project,
+                    move |result| {
+                        let Ok(file) = result else { return };
+                        let Some(path) = file.path() else { return };
+                        match recto_core::project::load_project(&path) {
+                            Ok(project) => load_project(project),
+                            Err(e) => tracing::error!("open project: {e}"),
+                        }
+                    }
+                ),
+            );
+        }
+    ));
 
     rotate_ccw.connect_clicked(glib::clone!(
         #[strong] state,
@@ -686,7 +530,7 @@ fn rotate_selected(sel: &gtk::MultiSelection, store: &gio::ListStore, state: &St
     }
 }
 
-fn decrement_pending(counter: &Rc<Cell<usize>>, spinner: &gtk::Spinner) {
+pub(crate) fn decrement_pending(counter: &Rc<Cell<usize>>, spinner: &gtk::Spinner) {
     let val = counter.get();
     if val > 0 {
         counter.set(val - 1);
@@ -707,7 +551,7 @@ fn selected_positions(sel: &gtk::MultiSelection) -> Vec<u32> {
     out
 }
 
-fn update_count(count: &gtk::Label, state: &State) {
+pub(crate) fn update_count(count: &gtk::Label, state: &State) {
     let n = state.borrow().pages.len();
     count.set_label(&format!("{} images", n));
 }

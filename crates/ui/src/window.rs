@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 use crate::app::{new_state, new_store, MarkDirty, Session, State};
 use crate::steps;
+use crate::types::AppError;
 
 pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
     let state: State = new_state();
@@ -66,17 +67,24 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
             spinner.set_visible(true);
             spinner.start();
 
-            let paths_with_indices: Vec<(usize, PathBuf)> = paths
-                .into_iter()
+            // Collect stable IDs on the main thread before spawning.
+            let paths_with_ids: Vec<(crate::types::PageId, PathBuf)> = paths
+                .iter()
                 .enumerate()
-                .map(|(i, p)| (start_index + i, p))
+                .map(|(i, p)| {
+                    let item = page_store
+                        .item((start_index + i) as u32)
+                        .and_downcast::<steps::page_item::PageItem>()
+                        .expect("just appended");
+                    (item.stable_id(), p.clone())
+                })
                 .collect();
 
             let tx = tx.clone();
             std::thread::spawn(move || {
-                paths_with_indices
+                paths_with_ids
                     .into_par_iter()
-                    .for_each(|(index, path)| {
+                    .for_each(|(id, path)| {
                         let file_dims = gdk_pixbuf::Pixbuf::file_info(&path)
                             .map(|(_, w, h)| (w as u32, h as u32))
                             .unwrap_or((0, 0));
@@ -99,7 +107,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
                                 orig_width,
                                 orig_height,
                             };
-                            let _ = tx.send_blocking(steps::import::LoadMsg::Progress(index, data));
+                            let _ = tx.send_blocking(steps::import::LoadMsg::Progress(id, data));
                         }
                         let _ = tx.send_blocking(steps::import::LoadMsg::Finished);
                     });
@@ -123,14 +131,13 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         move |project: recto_core::project::Project| {
             use rayon::prelude::*;
             page_store.remove_all();
-            let pages_info: Vec<(usize, PathBuf, u32)> = project
+            let pages_info: Vec<(PathBuf, u32)> = project
                 .pages
                 .iter()
-                .enumerate()
-                .map(|(i, p)| (i, p.path.clone(), p.rotation as u32))
+                .map(|p| (p.path.clone(), p.rotation as u32))
                 .collect();
             *state.borrow_mut() = project;
-            for (_, path, rotation) in &pages_info {
+            for (path, rotation) in &pages_info {
                 let item = steps::page_item::PageItem::new_placeholder(path.clone());
                 item.set_rotation(*rotation);
                 page_store.append(&item);
@@ -139,14 +146,26 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
             if pages_info.is_empty() {
                 return;
             }
-            pending_tasks.set(pending_tasks.get() + pages_info.len());
+            // Collect stable IDs on the main thread before spawning.
+            let ids_with_paths: Vec<(crate::types::PageId, PathBuf)> = pages_info
+                .iter()
+                .enumerate()
+                .map(|(i, (path, _))| {
+                    let item = page_store
+                        .item(i as u32)
+                        .and_downcast::<steps::page_item::PageItem>()
+                        .expect("just appended");
+                    (item.stable_id(), path.clone())
+                })
+                .collect();
+            pending_tasks.set(pending_tasks.get() + ids_with_paths.len());
             spinner.set_visible(true);
             spinner.start();
             let tx = tx.clone();
             std::thread::spawn(move || {
-                pages_info
+                ids_with_paths
                     .into_par_iter()
-                    .for_each(|(index, path, _rotation)| {
+                    .for_each(|(id, path)| {
                         let file_dims = gdk_pixbuf::Pixbuf::file_info(&path)
                             .map(|(_, w, h)| (w as u32, h as u32))
                             .unwrap_or((0, 0));
@@ -169,7 +188,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
                                 orig_width,
                                 orig_height,
                             };
-                            let _ = tx.send_blocking(steps::import::LoadMsg::Progress(index, data));
+                            let _ = tx.send_blocking(steps::import::LoadMsg::Progress(id, data));
                         }
                         let _ = tx.send_blocking(steps::import::LoadMsg::Finished);
                     });
@@ -187,7 +206,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         async move {
             while let Ok(msg) = rx.recv().await {
                 match msg {
-                    steps::import::LoadMsg::Progress(index, data) => {
+                    steps::import::LoadMsg::Progress(id, data) => {
                         let pb = gdk_pixbuf::Pixbuf::from_bytes(
                             &data.bytes,
                             gdk_pixbuf::Colorspace::Rgb,
@@ -197,13 +216,19 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
                             data.height,
                             data.rowstride,
                         );
-                        if let Some(item) = page_store
-                            .item(index as u32)
-                            .and_downcast::<steps::page_item::PageItem>()
-                        {
+                        // Find by stable ID — position may have shifted after deletions.
+                        let item = (0..page_store.n_items())
+                            .filter_map(|i| {
+                                page_store
+                                    .item(i)
+                                    .and_downcast::<steps::page_item::PageItem>()
+                            })
+                            .find(|item| item.stable_id() == id);
+                        if let Some(item) = item {
                             item.set_image(pb);
                             item.set_dims(data.orig_width, data.orig_height);
                         }
+                        // If not found: item was deleted before thumbnail arrived.
                     }
                     steps::import::LoadMsg::Finished => {
                         steps::import::decrement_pending(&pending_tasks, &spinner);
@@ -213,64 +238,19 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         }
     ));
 
-    let load_env = steps::import::LoadEnv {
-        spinner: spinner.clone(),
-        count: count.clone(),
-    };
+    // ---- Workspace (single unified view) ---------------------------------
 
-    // ---- Step pages -------------------------------------------------------
-
-    let work_stack = adw::ViewStack::new();
-    work_stack.add_titled_with_icon(
-        &steps::import::build(
-            state.clone(),
-            page_store.clone(),
-            selection.clone(),
-            paned_sync.clone(),
-            load_env,
-            Rc::clone(&load_images),
-            Rc::clone(&load_project),
-            Rc::clone(&mark_dirty),
-        ),
-        Some("import"),
-        "Import",
-        "document-open-symbolic",
+    let workspace = steps::workspace::build(
+        state.clone(),
+        page_store.clone(),
+        selection.clone(),
+        paned_sync.clone(),
+        spinner.clone(),
+        count.clone(),
+        Rc::clone(&load_images),
+        Rc::clone(&load_project),
+        Rc::clone(&mark_dirty),
     );
-    work_stack.add_titled_with_icon(
-        &steps::crop::build(
-            state.clone(),
-            page_store.clone(),
-            selection.clone(),
-            paned_sync.clone(),
-            Rc::clone(&mark_dirty),
-        ),
-        Some("crop"),
-        "Crop",
-        "edit-cut-symbolic",
-    );
-    work_stack.add_titled_with_icon(
-        &steps::colors::build(
-            state.clone(),
-            selection.clone(),
-            paned_sync.clone(),
-            Rc::clone(&mark_dirty),
-        ),
-        Some("colors"),
-        "Colors",
-        "preferences-color-symbolic",
-    );
-    work_stack.add_titled_with_icon(
-        &steps::export::build(state.clone(), Rc::clone(&mark_dirty)),
-        Some("export"),
-        "Export",
-        "document-save-symbolic",
-    );
-
-    let switcher = adw::ViewSwitcher::builder()
-        .stack(&work_stack)
-        .policy(adw::ViewSwitcherPolicy::Wide)
-        .build();
-    switcher.set_visible(false);
 
     // ---- Header bar -------------------------------------------------------
 
@@ -289,6 +269,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         let section = gio::Menu::new();
         section.append(Some("Save"), Some("win.save"));
         section.append(Some("Save As…"), Some("win.save-as"));
+        section.append(Some("Export\u{2026}"), Some("win.export"));
         menu_model.append_section(None, &section);
     }
     let menu_btn = gtk::MenuButton::builder()
@@ -304,15 +285,11 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
     let main_stack = gtk::Stack::new();
     main_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
 
-    // Show chrome (switcher + menu) and switch to the work view.
+    // Show menu and switch to the work view.
     let enter_main = {
         let main_stack = main_stack.clone();
-        let switcher = switcher.clone();
         let menu_btn = menu_btn.clone();
-        let header = header.clone();
         Rc::new(move || {
-            header.set_title_widget(Some(&switcher));
-            switcher.set_visible(true);
             menu_btn.set_visible(true);
             main_stack.set_visible_child_name("main");
         })
@@ -321,17 +298,18 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
     // Reset back to the start page.
     let enter_start = {
         let main_stack = main_stack.clone();
-        let switcher = switcher.clone();
         let menu_btn = menu_btn.clone();
-        let header = header.clone();
-        let title_widget = title_widget.clone();
         Rc::new(move || {
-            switcher.set_visible(false);
             menu_btn.set_visible(false);
-            header.set_title_widget(Some(&title_widget));
             main_stack.set_visible_child_name("start");
         })
     };
+
+    let window = adw::ApplicationWindow::builder()
+        .application(app)
+        .default_width(1100)
+        .default_height(720)
+        .build();
 
     let on_files: Rc<dyn Fn(Vec<PathBuf>)> = {
         let load = Rc::clone(&load_images);
@@ -347,6 +325,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         let enter_main = Rc::clone(&enter_main);
         let session = session.clone();
         let page_store = page_store.clone();
+        let window = window.clone();
         Rc::new(
             move |path: PathBuf| match recto_core::project::load_project(&path) {
                 Ok(project) => {
@@ -356,38 +335,34 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
                     session.clear_dirty();
                     enter_main();
                 }
-                Err(e) => tracing::error!("open project: {e}"),
+                Err(e) => {
+                    tracing::error!("open project: {e}");
+                    show_error_dialog(&window, &AppError::ProjectLoad(e.into()));
+                }
             },
         )
     };
 
     let start_page = steps::start::build(on_files.clone(), on_project.clone());
     main_stack.add_named(&start_page, Some("start"));
-    main_stack.add_named(&work_stack, Some("main"));
+    main_stack.add_named(&workspace, Some("main"));
     main_stack.set_visible_child_name("start");
 
     let toolbar = adw::ToolbarView::new();
     toolbar.add_top_bar(&header);
     toolbar.set_content(Some(&main_stack));
-
-    let window = adw::ApplicationWindow::builder()
-        .application(app)
-        .default_width(1100)
-        .default_height(720)
-        .content(&toolbar)
-        .build();
+    window.set_content(Some(&toolbar));
 
     // ---- Title sync -------------------------------------------------------
 
     {
         let title_widget = title_widget.clone();
         let window = window.clone();
-        session.connect_changed(move |s| {
+        session.connect_notify_local(Some("display-name"), move |s, _| {
             let name = s.display_name();
-            let dirty_mark = if s.is_dirty() { " •" } else { "" };
-            title_widget.set_title(&format!("{}{}", name, dirty_mark));
-            title_widget.set_subtitle(if s.is_dirty() { "Unsaved changes" } else { "" });
-            window.set_title(Some(&format!("{}{} — Recto", name, dirty_mark)));
+            title_widget.set_title(&name);
+            title_widget.set_subtitle(if s.dirty() { "Unsaved changes" } else { "" });
+            window.set_title(Some(&format!("{} — Recto", name)));
         });
     }
     // Prime once.
@@ -406,7 +381,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
             if path.extension().is_none() {
                 path = path.with_extension("pcut");
             }
-            let project = session.state.borrow().clone();
+            let project = session.state().borrow().clone();
             match recto_core::project::save_project(&project, &path) {
                 Ok(()) => {
                     session.set_path(Some(&path));
@@ -482,7 +457,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         let session = session.clone();
         let save_now = save_now.clone();
         Rc::new(move |after: Rc<dyn Fn()>| {
-            if !session.is_dirty() {
+            if !session.dirty() {
                 after();
                 return;
             }
@@ -580,11 +555,23 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         });
     }
 
+    // win.export — open export dialog
+    let act_export = gio::SimpleAction::new("export", None);
+    {
+        let state = state.clone();
+        let mark_dirty = mark_dirty.clone();
+        let window = window.clone();
+        act_export.connect_activate(move |_, _| {
+            steps::export::show_export_dialog(state.clone(), mark_dirty.clone(), window.upcast_ref::<gtk::Window>());
+        });
+    }
+
     let actions = gio::SimpleActionGroup::new();
     actions.add_action(&act_new);
     actions.add_action(&act_open);
     actions.add_action(&act_save);
     actions.add_action(&act_save_as);
+    actions.add_action(&act_export);
     window.insert_action_group("win", Some(&actions));
 
     app.set_accels_for_action("win.save", &["<Primary>s"]);
@@ -601,7 +588,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         let force_close = Rc::new(Cell::new(false));
         let fc = force_close.clone();
         window.connect_close_request(move |w| {
-            if fc.get() || !session.is_dirty() {
+            if fc.get() || !session.dirty() {
                 return glib::Propagation::Proceed;
             }
             let force_close = fc.clone();
@@ -628,7 +615,23 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
                 session.clear_dirty();
                 enter_main();
             }
-            Err(e) => tracing::error!("Failed to load project {:?}: {}", path, e),
+            Err(e) => {
+                tracing::error!("Failed to load project {:?}: {}", path, e);
+                show_error_dialog(&window, &AppError::ProjectLoad(e.into()));
+            }
         }
     }
+}
+
+fn show_error_dialog(parent: &impl gtk::prelude::IsA<gtk::Window>, err: &AppError) {
+    let dialog = adw::MessageDialog::builder()
+        .transient_for(parent)
+        .modal(true)
+        .heading("Error")
+        .body(err.to_string())
+        .build();
+    dialog.add_response("ok", "OK");
+    dialog.set_default_response(Some("ok"));
+    dialog.connect_response(None, |dlg, _| dlg.close());
+    dialog.present();
 }

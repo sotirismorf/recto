@@ -1,5 +1,6 @@
 mod app;
 mod steps;
+mod types;
 mod widgets;
 mod window;
 

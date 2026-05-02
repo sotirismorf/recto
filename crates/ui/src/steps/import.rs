@@ -1,27 +1,10 @@
-use adw::prelude::*;
-use gtk::{gdk, gdk_pixbuf, gio, glib};
+use gtk::prelude::*;
+use gtk::glib;
 use std::cell::Cell;
-use std::path::PathBuf;
 use std::rc::Rc;
 
-pub(crate) fn exif_corrected_dims(file_dims: (u32, u32), thumb_w: i32, thumb_h: i32) -> (u32, u32) {
-    let (fw, fh) = file_dims;
-    if fw == 0 || fh == 0 || thumb_w == 0 || thumb_h == 0 {
-        return file_dims;
-    }
-    let (fw, fh) = (fw as f64, fh as f64);
-    let (tw, th) = (thumb_w as f64, thumb_h as f64);
-    if (tw * fh - th * fw).abs() <= (tw * fw - th * fh).abs() {
-        (fw as u32, fh as u32)
-    } else {
-        (fh as u32, fw as u32)
-    }
-}
-
-use super::page_item::PageItem;
-use crate::app::{MarkDirty, State};
-use crate::widgets::zoom_pan::{ZoomPanConfig, ZoomPanController};
-use recto_core::project::Project;
+use crate::app::State;
+use crate::types::PageId;
 
 pub struct ThumbData {
     pub bytes: glib::Bytes,
@@ -34,446 +17,25 @@ pub struct ThumbData {
 }
 
 pub enum LoadMsg {
-    Progress(usize, ThumbData),
+    Progress(PageId, ThumbData),
     Finished,
 }
 
-pub struct LoadEnv {
-    pub spinner: gtk::Spinner,
-    pub count: gtk::Label,
-}
-
-pub fn build(
-    state: State,
-    page_store: gio::ListStore,
-    selection: gtk::MultiSelection,
-    paned_sync: super::PanedSync,
-    env: LoadEnv,
-    load_images: Rc<dyn Fn(Vec<PathBuf>)>,
-    load_project: Rc<dyn Fn(Project)>,
-    mark_dirty: MarkDirty,
-) -> gtk::Widget {
-    let LoadEnv { spinner, count } = env;
-    let store = page_store;
-
-    let (tx_prev, rx_prev) = async_channel::unbounded::<(u64, PathBuf, u32)>();
-    let (tx_prev_res, rx_prev_res) = async_channel::unbounded::<(u64, ThumbData)>();
-
-    std::thread::spawn(move || {
-        while let Ok((id, path, rotation)) = rx_prev.recv_blocking() {
-            let mut latest = (id, path, rotation);
-            while let Ok(next) = rx_prev.try_recv() {
-                latest = next;
-            }
-            let (id, path, rotation) = latest;
-            if let Ok(pb) = gdk_pixbuf::Pixbuf::from_file(&path) {
-                let pb = pb.apply_embedded_orientation().unwrap_or(pb);
-                let pb = super::page_item::rotate(&pb, rotation);
-
-                let bytes = pb.read_pixel_bytes();
-                let data = ThumbData {
-                    bytes,
-                    width: pb.width(),
-                    height: pb.height(),
-                    rowstride: pb.rowstride(),
-                    has_alpha: pb.has_alpha(),
-                    orig_width: pb.width() as u32,
-                    orig_height: pb.height() as u32,
-                };
-
-                let _ = tx_prev_res.send_blocking((id, data));
-            }
-        }
-    });
-
-    let preview_req_id = Rc::new(Cell::new(0u64));
-
-    let toolbar = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(6)
-        .margin_top(8)
-        .margin_bottom(8)
-        .margin_start(12)
-        .margin_end(12)
-        .build();
-
-    let add_btn = gtk::Button::builder()
-        .label("Add Images")
-        .icon_name("list-add-symbolic")
-        .build();
-    add_btn.add_css_class("suggested-action");
-
-    let open_project_btn = gtk::Button::builder()
-        .label("Open Project…")
-        .icon_name("document-open-symbolic")
-        .tooltip_text("Open a saved .recto project file")
-        .build();
-
-    let rotate_ccw = gtk::Button::builder()
-        .icon_name("object-rotate-left-symbolic")
-        .tooltip_text("Rotate selected 90° counter-clockwise")
-        .sensitive(false)
-        .build();
-    let rotate_cw = gtk::Button::builder()
-        .icon_name("object-rotate-right-symbolic")
-        .tooltip_text("Rotate selected 90° clockwise")
-        .sensitive(false)
-        .build();
-    let rotate_180 = gtk::Button::builder()
-        .label("180°")
-        .tooltip_text("Rotate selected 180°")
-        .sensitive(false)
-        .build();
-    let delete_btn = gtk::Button::builder()
-        .icon_name("user-trash-symbolic")
-        .tooltip_text("Remove selected")
-        .sensitive(false)
-        .build();
-    delete_btn.add_css_class("destructive-action");
-
-    let spacer = gtk::Box::builder().hexpand(true).build();
-
-    toolbar.append(&add_btn);
-    toolbar.append(&open_project_btn);
-    toolbar.append(&gtk::Separator::new(gtk::Orientation::Vertical));
-    toolbar.append(&rotate_ccw);
-    toolbar.append(&rotate_cw);
-    toolbar.append(&rotate_180);
-    toolbar.append(&gtk::Separator::new(gtk::Orientation::Vertical));
-    toolbar.append(&delete_btn);
-    toolbar.append(&spacer);
-    toolbar.append(&spinner);
-    toolbar.append(&count);
-
-    // Preview surface: a custom widget that renders a gdk::Texture via GPU.
-    let preview = crate::widgets::preview_canvas::PreviewCanvas::new();
-    preview.set_hexpand(true);
-    preview.set_vexpand(true);
-    preview.add_css_class("view");
-
-    let zoom_pan = ZoomPanController::attach(
-        &preview,
-        &preview,
-        ZoomPanConfig {
-            pan_button: gdk::BUTTON_PRIMARY,
-            ..Default::default()
-        },
-    );
-
-    glib::MainContext::default().spawn_local({
-        let preview_weak = preview.downgrade();
-        let preview_req_id = preview_req_id.clone();
-        let zoom_pan = zoom_pan.clone();
-        async move {
-            while let Ok((id, data)) = rx_prev_res.recv().await {
-                if id != preview_req_id.get() {
-                    continue;
-                }
-                let pb = gdk_pixbuf::Pixbuf::from_bytes(
-                    &data.bytes,
-                    gdk_pixbuf::Colorspace::Rgb,
-                    data.has_alpha,
-                    8,
-                    data.width,
-                    data.height,
-                    data.rowstride,
-                );
-                let tex = gdk::Texture::for_pixbuf(&pb);
-                let Some(preview) = preview_weak.upgrade() else {
-                    continue;
-                };
-                preview.set_texture(Some(tex));
-                zoom_pan.refit_after_texture_change();
-            }
-        }
-    });
-
-    let factory = super::grid::simple_factory();
-    let (_grid_view, grid_scroll) = super::grid::build_grid_scroll(&selection, &factory);
-
-    let click_gesture = gtk::GestureClick::builder().build();
-    click_gesture.connect_pressed(glib::clone!(
-        #[weak]
-        selection,
-        move |gesture, n_press, x, y| {
-            if n_press == 1 {
-                if let Some(widget) = gesture.widget() {
-                    if let Some(target) = widget.pick(x, y, gtk::PickFlags::DEFAULT) {
-                        if target.is::<gtk::GridView>()
-                            || target.is::<gtk::Viewport>()
-                            || target.is::<gtk::ScrolledWindow>()
-                        {
-                            selection.unselect_all();
-                        }
-                    }
-                }
-            }
-        }
-    ));
-    grid_scroll.add_controller(click_gesture);
-
-    let left = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .build();
-    left.append(&preview);
-    left.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-    left.append(&toolbar);
-
-    let paned = gtk::Paned::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .start_child(&left)
-        .end_child(&grid_scroll)
-        .resize_start_child(false)
-        .resize_end_child(true)
-        .shrink_start_child(false)
-        .shrink_end_child(false)
-        .vexpand(true)
-        .build();
-    paned_sync.register(&paned);
-
-    selection.connect_selection_changed(glib::clone!(
-        #[strong]
-        selection,
-        #[weak]
-        preview,
-        #[strong]
-        preview_req_id,
-        #[strong]
-        tx_prev,
-        #[weak]
-        rotate_ccw,
-        #[weak]
-        rotate_cw,
-        #[weak]
-        rotate_180,
-        #[weak]
-        delete_btn,
-        move |_, _, _| {
-            let positions = selected_positions(&selection);
-            let any = !positions.is_empty();
-            rotate_ccw.set_sensitive(any);
-            rotate_cw.set_sensitive(any);
-            rotate_180.set_sensitive(any);
-            delete_btn.set_sensitive(any);
-            update_preview(&selection, &preview, &preview_req_id, &tx_prev);
-        }
-    ));
-
-    add_btn.connect_clicked(glib::clone!(
-        #[strong]
-        load_images,
-        move |btn| {
-            let dialog = gtk::FileDialog::builder()
-                .title("Add page images")
-                .modal(true)
-                .build();
-            let filter = gtk::FileFilter::new();
-            filter.set_name(Some("Images"));
-            for mime in [
-                "image/jpeg",
-                "image/png",
-                "image/tiff",
-                "image/webp",
-                "image/bmp",
-            ] {
-                filter.add_mime_type(mime);
-            }
-            let filters = gio::ListStore::new::<gtk::FileFilter>();
-            filters.append(&filter);
-            dialog.set_filters(Some(&filters));
-
-            let parent = btn.root().and_downcast::<gtk::Window>();
-            dialog.open_multiple(
-                parent.as_ref(),
-                gio::Cancellable::NONE,
-                glib::clone!(
-                    #[strong]
-                    load_images,
-                    move |result| {
-                        let Ok(files) = result else { return };
-                        let mut paths = Vec::new();
-                        for i in 0..files.n_items() {
-                            let Some(file) = files.item(i).and_downcast::<gio::File>() else {
-                                continue;
-                            };
-                            if let Some(path) = file.path() {
-                                paths.push(path);
-                            }
-                        }
-                        load_images(paths);
-                    }
-                ),
-            );
-        }
-    ));
-
-    let drop = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
-    drop.connect_drop(glib::clone!(
-        #[strong]
-        load_images,
-        move |_, value, _, _| {
-            let Ok(file_list) = value.get::<gdk::FileList>() else {
-                return false;
-            };
-            let mut paths = Vec::new();
-            for file in file_list.files() {
-                if let Some(path) = file.path() {
-                    paths.push(path);
-                }
-            }
-            load_images(paths);
-            true
-        }
-    ));
-    paned.add_controller(drop);
-
-    open_project_btn.connect_clicked(glib::clone!(
-        #[strong]
-        load_project,
-        move |btn| {
-            let dialog = gtk::FileDialog::builder()
-                .title("Open Project")
-                .modal(true)
-                .build();
-            let filter = gtk::FileFilter::new();
-            filter.set_name(Some("Recto project (*.recto)"));
-            filter.add_pattern("*.recto");
-            let filters = gio::ListStore::new::<gtk::FileFilter>();
-            filters.append(&filter);
-            dialog.set_filters(Some(&filters));
-            let parent = btn.root().and_downcast::<gtk::Window>();
-            dialog.open(
-                parent.as_ref(),
-                gio::Cancellable::NONE,
-                glib::clone!(
-                    #[strong]
-                    load_project,
-                    move |result| {
-                        let Ok(file) = result else { return };
-                        let Some(path) = file.path() else { return };
-                        match recto_core::project::load_project(&path) {
-                            Ok(project) => load_project(project),
-                            Err(e) => tracing::error!("open project: {e}"),
-                        }
-                    }
-                ),
-            );
-        }
-    ));
-
-    rotate_ccw.connect_clicked(glib::clone!(
-        #[strong]
-        state,
-        #[weak]
-        store,
-        #[strong]
-        selection,
-        #[weak]
-        preview,
-        #[strong]
-        preview_req_id,
-        #[strong]
-        tx_prev,
-        #[strong]
-        mark_dirty,
-        move |_| {
-            rotate_selected(&selection, &store, &state, -90);
-            update_preview(&selection, &preview, &preview_req_id, &tx_prev);
-            mark_dirty();
-        }
-    ));
-    rotate_cw.connect_clicked(glib::clone!(
-        #[strong]
-        state,
-        #[weak]
-        store,
-        #[strong]
-        selection,
-        #[weak]
-        preview,
-        #[strong]
-        preview_req_id,
-        #[strong]
-        tx_prev,
-        #[strong]
-        mark_dirty,
-        move |_| {
-            rotate_selected(&selection, &store, &state, 90);
-            update_preview(&selection, &preview, &preview_req_id, &tx_prev);
-            mark_dirty();
-        }
-    ));
-    rotate_180.connect_clicked(glib::clone!(
-        #[strong]
-        state,
-        #[weak]
-        store,
-        #[strong]
-        selection,
-        #[weak]
-        preview,
-        #[strong]
-        preview_req_id,
-        #[strong]
-        tx_prev,
-        #[strong]
-        mark_dirty,
-        move |_| {
-            rotate_selected(&selection, &store, &state, 180);
-            update_preview(&selection, &preview, &preview_req_id, &tx_prev);
-            mark_dirty();
-        }
-    ));
-
-    delete_btn.connect_clicked(glib::clone!(
-        #[strong]
-        state,
-        #[weak]
-        store,
-        #[strong]
-        selection,
-        #[weak]
-        count,
-        #[weak]
-        preview,
-        #[strong]
-        preview_req_id,
-        #[strong]
-        tx_prev,
-        #[strong]
-        mark_dirty,
-        move |_| {
-            let mut positions = selected_positions(&selection);
-            positions.sort_unstable_by(|a, b| b.cmp(a));
-            let removed = !positions.is_empty();
-            for pos in positions {
-                store.remove(pos);
-                let mut p = state.borrow_mut();
-                if (pos as usize) < p.pages.len() {
-                    p.pages.remove(pos as usize);
-                }
-            }
-            update_count(&count, &state);
-            update_preview(&selection, &preview, &preview_req_id, &tx_prev);
-            if removed {
-                mark_dirty();
-            }
-        }
-    ));
-
-    paned.upcast()
-}
-
-fn rotate_selected(sel: &gtk::MultiSelection, store: &gio::ListStore, state: &State, delta: i32) {
-    for pos in selected_positions(sel) {
-        let Some(page) = store.item(pos).and_downcast::<PageItem>() else {
-            continue;
-        };
-        page.apply_rotation_delta(delta);
-        let mut p = state.borrow_mut();
-        if let Some(stored) = p.pages.get_mut(pos as usize) {
-            stored.rotation = page.rotation() as u16;
-        }
+pub(crate) fn exif_corrected_dims(
+    file_dims: (u32, u32),
+    thumb_w: i32,
+    thumb_h: i32,
+) -> (u32, u32) {
+    let (fw, fh) = file_dims;
+    if fw == 0 || fh == 0 || thumb_w == 0 || thumb_h == 0 {
+        return file_dims;
+    }
+    let (fw, fh) = (fw as f64, fh as f64);
+    let (tw, th) = (thumb_w as f64, thumb_h as f64);
+    if (tw * fh - th * fw).abs() <= (tw * fw - th * fh).abs() {
+        (fw as u32, fh as u32)
+    } else {
+        (fh as u32, fw as u32)
     }
 }
 
@@ -488,36 +50,36 @@ pub(crate) fn decrement_pending(counter: &Rc<Cell<usize>>, spinner: &gtk::Spinne
     }
 }
 
-fn selected_positions(sel: &gtk::MultiSelection) -> Vec<u32> {
-    let bs = sel.selection();
-    let mut out = Vec::new();
-    if let Some((iter, first)) = gtk::BitsetIter::init_first(&bs) {
-        out.push(first);
-        out.extend(iter);
-    }
-    out
-}
-
 pub(crate) fn update_count(count: &gtk::Label, state: &State) {
     let n = state.borrow().pages.len();
     count.set_label(&format!("{} images", n));
 }
 
-fn update_preview(
-    sel: &gtk::MultiSelection,
-    preview: &crate::widgets::preview_canvas::PreviewCanvas,
-    preview_req_id: &Rc<Cell<u64>>,
-    tx_prev: &async_channel::Sender<(u64, PathBuf, u32)>,
-) {
-    let positions = selected_positions(sel);
-    if let Some(&first) = positions.first() {
-        if let Some(page) = sel.item(first).and_downcast::<PageItem>() {
-            let id = preview_req_id.get() + 1;
-            preview_req_id.set(id);
-            let _ = tx_prev.send_blocking((id, page.path(), page.rotation()));
-            return;
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exif_orientation_portrait() {
+        let dims = exif_corrected_dims((6000, 4000), 256, 384);
+        assert_eq!(dims, (4000, 6000));
     }
-    preview_req_id.set(preview_req_id.get() + 1);
-    preview.set_texture(None);
+
+    #[test]
+    fn exif_orientation_landscape() {
+        let dims = exif_corrected_dims((6000, 4000), 384, 256);
+        assert_eq!(dims, (6000, 4000));
+    }
+
+    #[test]
+    fn exif_zero_dims_fallback() {
+        let dims = exif_corrected_dims((0, 0), 256, 256);
+        assert_eq!(dims, (0, 0));
+    }
+
+    #[test]
+    fn exif_square_image() {
+        let dims = exif_corrected_dims((4000, 4000), 256, 256);
+        assert_eq!(dims, (4000, 4000));
+    }
 }

@@ -9,6 +9,7 @@ use gtk::prelude::*;
 use gtk::{gdk, glib};
 
 use super::page_item::PageItem;
+use crate::types::PageId;
 
 pub const THUMB_PX: i32 = 150;
 pub const CARD_CHARS: i32 = 18;
@@ -89,51 +90,13 @@ fn unbind_props(item: &gtk::ListItem) {
     }
 }
 
-/// Factory for a plain thumbnail grid (image + filename label). Used by the
-/// import and colors steps.
-pub fn simple_factory() -> gtk::SignalListItemFactory {
-    let factory = gtk::SignalListItemFactory::new();
-    factory.connect_setup(|_, list_item| {
-        let item = list_item
-            .downcast_ref::<gtk::ListItem>()
-            .expect("ListItem expected");
-        let (card, image, label) = make_card();
-        card.append(&image);
-        card.append(&label);
-        item.set_child(Some(&card));
-    });
-    factory.connect_bind(|_, list_item| {
-        let item = list_item
-            .downcast_ref::<gtk::ListItem>()
-            .expect("ListItem expected");
-        let page: PageItem = item.item().and_downcast().expect("PageItem expected");
-        let card: gtk::Box = item.child().and_downcast().expect("Box card expected");
-        let image: gtk::Image = card
-            .first_child()
-            .and_downcast()
-            .expect("first card child must be Image");
-        let label: gtk::Label = image
-            .next_sibling()
-            .and_downcast()
-            .expect("second card child must be Label");
-        bind_props(item, &page, &image, &label);
-    });
-    factory.connect_unbind(|_, list_item| {
-        let item = list_item
-            .downcast_ref::<gtk::ListItem>()
-            .expect("ListItem expected");
-        unbind_props(item);
-    });
-    factory
-}
-
 /// Factory for a grid where each thumbnail has a transparent overlay on top
 /// (used by the crop step to draw the crop rectangle). The caller's
-/// `set_draw` closure is invoked once per bind with the page index and the
-/// per-card DrawingArea, and is expected to install a draw_func on it.
+/// `set_draw` closure is invoked once per bind with the page's stable_id and
+/// the per-card DrawingArea, and is expected to install a draw_func on it.
 pub fn overlay_factory<F>(set_draw: F) -> gtk::SignalListItemFactory
 where
-    F: Fn(usize, &gtk::DrawingArea) + 'static,
+    F: Fn(PageId, &gtk::DrawingArea) + 'static,
 {
     let set_draw = Rc::new(set_draw);
     let factory = gtk::SignalListItemFactory::new();
@@ -186,7 +149,7 @@ where
                 .and_downcast()
                 .expect("overlay must have a DrawingArea on top");
             bind_props(item, &page, &image, &label);
-            set_draw(item.position() as usize, &da);
+            set_draw(page.stable_id(), &da);
         }
     });
     factory.connect_unbind(|_, list_item| {

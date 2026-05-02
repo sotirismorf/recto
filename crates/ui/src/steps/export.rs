@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gtk::prelude::*;
+use adw::prelude::*;
 use gtk::{gio, glib};
 
 use crate::app::{MarkDirty, State};
@@ -13,7 +13,24 @@ enum ExportMsg {
     Done(Vec<(bool, String)>),
 }
 
-pub fn build(state: State, mark_dirty: MarkDirty) -> gtk::Widget {
+pub fn show_export_dialog(state: State, mark_dirty: MarkDirty, parent: &gtk::Window) {
+    let dialog = adw::Window::builder()
+        .title("Export")
+        .modal(true)
+        .transient_for(parent)
+        .default_width(540)
+        .default_height(580)
+        .resizable(false)
+        .build();
+    let header = adw::HeaderBar::new();
+    let toolbar_view = adw::ToolbarView::new();
+    toolbar_view.add_top_bar(&header);
+    toolbar_view.set_content(Some(&build_export_content(state, mark_dirty)));
+    dialog.set_content(Some(&toolbar_view));
+    dialog.present();
+}
+
+fn build_export_content(state: State, mark_dirty: MarkDirty) -> gtk::Widget {
     let (tx, rx) = async_channel::unbounded::<ExportMsg>();
 
     // PDF metadata — loaded from ~/.config/recto/pdf_meta.json once.

@@ -28,9 +28,9 @@
             "sources": [
                 {
                     "type": "dir",
-                    "path": "."
+                    "path": ".."
                 },
-                "flatpak/cargo-sources.json"
+                "cargo-sources.json"
             ],
             "build-commands": [
                 "mkdir -p .cargo",

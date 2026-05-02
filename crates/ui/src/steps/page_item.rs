@@ -2,6 +2,8 @@ use gtk::{gdk, gdk_pixbuf, glib, prelude::*, subclass::prelude::*};
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 
+use crate::types::PageId;
+
 mod imp {
     use super::*;
 
@@ -17,9 +19,9 @@ mod imp {
 
         pub base_pixbuf: RefCell<Option<gdk_pixbuf::Pixbuf>>,
         pub path: RefCell<PathBuf>,
-        /// Original image dimensions (read from file header, not thumbnail).
         pub base_width: Cell<u32>,
         pub base_height: Cell<u32>,
+        pub stable_id: Cell<PageId>,
     }
 
     #[glib::object_subclass]
@@ -39,6 +41,7 @@ glib::wrapper! {
 impl PageItem {
     pub fn new(path: PathBuf, base: gdk_pixbuf::Pixbuf) -> Self {
         let obj: Self = glib::Object::new();
+        obj.imp().stable_id.set(PageId::new());
         {
             let i = obj.imp();
             *i.path.borrow_mut() = path.clone();
@@ -56,6 +59,7 @@ impl PageItem {
 
     pub fn new_placeholder(path: PathBuf) -> Self {
         let obj: Self = glib::Object::new();
+        obj.imp().stable_id.set(PageId::new());
         {
             let i = obj.imp();
             *i.path.borrow_mut() = path.clone();
@@ -70,21 +74,21 @@ impl PageItem {
         obj
     }
 
+    pub fn stable_id(&self) -> PageId {
+        self.imp().stable_id.get()
+    }
+
     pub fn set_image(&self, base: gdk_pixbuf::Pixbuf) {
         {
             let i = self.imp();
             *i.base_pixbuf.borrow_mut() = Some(base.clone());
         }
-        // Preserve current rotation when applying new image
         let current_rotation = self.rotation();
         let rotated = rotate(&base, current_rotation);
         let texture = gdk::Texture::for_pixbuf(&rotated);
         self.set_thumbnail(Some(texture.upcast::<gdk::Paintable>()));
     }
 
-    /// Store the original (full-resolution) image dimensions, read from the
-    /// file header in a background thread. Called from the main thread after
-    /// each thumbnail finishes loading.
     pub fn set_dims(&self, w: u32, h: u32) {
         let i = self.imp();
         i.base_width.set(w);

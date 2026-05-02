@@ -5,6 +5,7 @@ pub mod grid;
 pub mod import;
 pub mod page_item;
 pub mod start;
+pub mod workspace;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -28,7 +29,7 @@ pub struct PanedSync(Rc<PanedSyncInner>);
 impl PanedSync {
     pub fn new() -> Self {
         Self(Rc::new(PanedSyncInner {
-            position: Cell::new(560),
+            position: Cell::new(720),
             paneds: RefCell::new(Vec::new()),
             updating: Cell::new(false),
         }))

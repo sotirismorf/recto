@@ -29,7 +29,7 @@ struct ColorResult {
     has_alpha: bool,
 }
 
-pub fn build(state: State, page_store: gio::ListStore) -> gtk::Widget {
+pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedSync) -> gtk::Widget {
     let req_id: Rc<Cell<u64>> = Rc::new(Cell::new(0));
     let (tx_req, rx_req) = async_channel::unbounded::<ColorReq>();
     let (tx_res, rx_res) = async_channel::unbounded::<ColorResult>();
@@ -114,15 +114,19 @@ pub fn build(state: State, page_store: gio::ListStore) -> gtk::Widget {
         let card = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(4)
-            .margin_top(4)
-            .margin_bottom(4)
-            .margin_start(4)
-            .margin_end(4)
+            .margin_top(8)
+            .margin_bottom(8)
+            .margin_start(8)
+            .margin_end(8)
+            .halign(gtk::Align::Center)
+            .hexpand(false)
             .build();
         let pic = gtk::Picture::builder()
             .content_fit(gtk::ContentFit::Contain)
             .width_request(150)
             .height_request(150)
+            .hexpand(false)
+            .vexpand(false)
             .build();
         let lbl = gtk::Label::builder()
             .ellipsize(gtk::pango::EllipsizeMode::End)
@@ -161,7 +165,7 @@ pub fn build(state: State, page_store: gio::ListStore) -> gtk::Widget {
     let grid_view = gtk::GridView::builder()
         .model(&selection)
         .factory(&factory)
-        .min_columns(2)
+        .min_columns(1)
         .max_columns(8)
         .enable_rubberband(true)
         .vexpand(true)
@@ -175,23 +179,24 @@ pub fn build(state: State, page_store: gio::ListStore) -> gtk::Widget {
         .hexpand(true)
         .build();
 
+    let left = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
+    left.append(&preview);
+    left.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    left.append(&toolbar);
+
     let paned = gtk::Paned::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .start_child(&preview)
+        .start_child(&left)
         .end_child(&grid_scroll)
-        .resize_start_child(true)
+        .resize_start_child(false)
         .resize_end_child(true)
         .shrink_start_child(false)
         .shrink_end_child(false)
-        .position(560)
         .vexpand(true)
         .build();
-
-    let root = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .build();
-    root.append(&toolbar);
-    root.append(&paned);
+    paned_sync.register(&paned);
 
     glib::MainContext::default().spawn_local({
         let preview_weak = preview.downgrade();
@@ -262,7 +267,7 @@ pub fn build(state: State, page_store: gio::ListStore) -> gtk::Widget {
         }
     });
 
-    root.upcast()
+    paned.upcast()
 }
 
 fn send_preview_req(

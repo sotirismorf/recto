@@ -615,7 +615,7 @@ impl CropPicker {
 
 // --- build() — entry point ------------------------------------------------
 
-pub fn build(state: State, page_store: gio::ListStore) -> gtk::Widget {
+pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedSync) -> gtk::Widget {
     let current_index: Rc<Cell<i32>> = Rc::new(Cell::new(-1));
     let initialised: Rc<Cell<bool>> = Rc::new(Cell::new(false));
 
@@ -671,16 +671,23 @@ pub fn build(state: State, page_store: gio::ListStore) -> gtk::Widget {
             let card = gtk::Box::builder()
                 .orientation(gtk::Orientation::Vertical)
                 .spacing(4)
-                .margin_top(4)
-                .margin_bottom(4)
-                .margin_start(4)
-                .margin_end(4)
+                .margin_top(8)
+                .margin_bottom(8)
+                .margin_start(8)
+                .margin_end(8)
+                .halign(gtk::Align::Center)
+                .hexpand(false)
                 .build();
-            let overlay = gtk::Overlay::new();
-            let pic = gtk::Picture::builder()
-                .content_fit(gtk::ContentFit::Contain)
+            let overlay = gtk::Overlay::builder()
                 .width_request(150)
                 .height_request(150)
+                .hexpand(false)
+                .vexpand(false)
+                .build();
+            let pic = gtk::Picture::builder()
+                .content_fit(gtk::ContentFit::Contain)
+                .hexpand(true)
+                .vexpand(true)
                 .build();
             overlay.set_child(Some(&pic));
             let da = gtk::DrawingArea::builder()
@@ -771,7 +778,7 @@ pub fn build(state: State, page_store: gio::ListStore) -> gtk::Widget {
     let grid_view = gtk::GridView::builder()
         .model(&selection)
         .factory(&factory)
-        .min_columns(2)
+        .min_columns(1)
         .max_columns(8)
         .enable_rubberband(true)
         .vexpand(true)
@@ -780,7 +787,7 @@ pub fn build(state: State, page_store: gio::ListStore) -> gtk::Widget {
     grid_view.add_css_class("photo-grid");
 
     let provider = gtk::CssProvider::new();
-    provider.load_from_string(".photo-grid > child { margin: 8px; border-radius: 8px; }");
+    provider.load_from_string(".photo-grid > child { border-radius: 8px; }");
     gtk::style_context_add_provider_for_display(
         &gdk::Display::default().expect("display must be available"),
         &provider,
@@ -846,24 +853,25 @@ pub fn build(state: State, page_store: gio::ListStore) -> gtk::Widget {
         .hexpand(true)
         .build();
 
-    // --- Paned: left = crop preview, right = grid -----------------------
+    // --- Paned: left = crop preview + toolbar, right = grid -------------
+    let left = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
+    left.append(picker.overlay());
+    left.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    left.append(&toolbar);
+
     let paned = gtk::Paned::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .start_child(picker.overlay())
+        .start_child(&left)
         .end_child(&grid_scroll)
-        .resize_start_child(true)
+        .resize_start_child(false)
         .resize_end_child(true)
         .shrink_start_child(false)
         .shrink_end_child(false)
-        .position(560)
         .vexpand(true)
         .build();
-
-    let root = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .build();
-    root.append(&toolbar);
-    root.append(&paned);
+    paned_sync.register(&paned);
 
     // --- Selection drives picker.bind + toolbar/status ------------------
 
@@ -977,7 +985,7 @@ pub fn build(state: State, page_store: gio::ListStore) -> gtk::Widget {
 
     // --- One-shot init: auto-detect presets, refresh chips, select first
 
-    root.connect_map({
+    paned.connect_map({
         let state = state.clone();
         let store = page_store.clone();
         let chips = preset_chips.clone();
@@ -1000,7 +1008,7 @@ pub fn build(state: State, page_store: gio::ListStore) -> gtk::Widget {
         }
     });
 
-    root.upcast()
+    paned.upcast()
 }
 
 // --- helpers --------------------------------------------------------------

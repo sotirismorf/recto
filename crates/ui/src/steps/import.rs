@@ -38,7 +38,7 @@ enum LoadMsg {
     Finished,
 }
 
-pub fn build(state: State, page_store: gio::ListStore) -> gtk::Widget {
+pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedSync) -> gtk::Widget {
     let store = page_store;
     let selection = gtk::MultiSelection::new(Some(store.clone()));
 
@@ -373,6 +373,9 @@ use rayon::prelude::*;
         }
     });
 
+    const THUMB_PX: i32 = 150;
+    const CARD_CHARS: i32 = 18;
+
     let factory = gtk::SignalListItemFactory::new();
     factory.connect_setup(|_, list_item| {
         let item = list_item
@@ -381,19 +384,24 @@ use rayon::prelude::*;
         let card = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(4)
-            .margin_top(4)
-            .margin_bottom(4)
-            .margin_start(4)
-            .margin_end(4)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Start)
+            .hexpand(false)
+            .vexpand(false)
             .build();
-        let pic = gtk::Picture::builder()
-            .content_fit(gtk::ContentFit::Contain)
-            .width_request(150)
-            .height_request(150)
+        // gtk::Image with pixel_size clamps its natural size to a fixed
+        // square — unlike gtk::Picture, whose natural size grows with the
+        // paintable. That keeps cells stable and lets only the inter-card
+        // gap fluctuate as the grid reflows columns.
+        let pic = gtk::Image::builder()
+            .pixel_size(THUMB_PX)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
             .build();
         let lbl = gtk::Label::builder()
             .ellipsize(gtk::pango::EllipsizeMode::End)
-            .max_width_chars(18)
+            .max_width_chars(CARD_CHARS)
+            .width_chars(CARD_CHARS)
             .css_classes(["caption"])
             .build();
         card.append(&pic);
@@ -409,7 +417,7 @@ use rayon::prelude::*;
             .and_downcast()
             .expect("ListStore item must be PageItem");
         let card: gtk::Box = item.child().and_downcast().expect("child must be gtk::Box");
-        let pic: gtk::Picture = card.first_child().and_downcast().expect("first child must be gtk::Picture");
+        let pic: gtk::Image = card.first_child().and_downcast().expect("first child must be gtk::Image");
         let lbl: gtk::Label = pic.next_sibling().and_downcast().expect("next sibling must be gtk::Label");
 
         let b1 = page
@@ -450,7 +458,7 @@ use rayon::prelude::*;
     let grid_view = gtk::GridView::builder()
         .model(&selection)
         .factory(&factory)
-        .min_columns(2)
+        .min_columns(1)
         .max_columns(8)
         .enable_rubberband(true)
         .vexpand(true)
@@ -459,7 +467,9 @@ use rayon::prelude::*;
     grid_view.add_css_class("photo-grid");
 
     let provider = gtk::CssProvider::new();
-    provider.load_from_string(".photo-grid > child { margin: 8px; border-radius: 8px; }");
+    provider.load_from_string(
+        ".photo-grid > child { margin: 6px; padding: 8px; border-radius: 8px; }",
+    );
     gtk::style_context_add_provider_for_display(
         &gdk::Display::default().expect("display must be available"),
         &provider,
@@ -489,23 +499,24 @@ use rayon::prelude::*;
     ));
     grid_scroll.add_controller(click_gesture);
 
+    let left = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
+    left.append(&preview);
+    left.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    left.append(&toolbar);
+
     let paned = gtk::Paned::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .start_child(&preview)
+        .start_child(&left)
         .end_child(&grid_scroll)
-        .resize_start_child(true)
+        .resize_start_child(false)
         .resize_end_child(true)
         .shrink_start_child(false)
         .shrink_end_child(false)
-        .position(560)
         .vexpand(true)
         .build();
-
-    let root = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .build();
-    root.append(&toolbar);
-    root.append(&paned);
+    paned_sync.register(&paned);
 
     selection.connect_selection_changed(glib::clone!(
         #[strong] selection,
@@ -593,7 +604,7 @@ use rayon::prelude::*;
             true
         }
     ));
-    root.add_controller(drop);
+    paned.add_controller(drop);
 
     rotate_ccw.connect_clicked(glib::clone!(
         #[strong] state,
@@ -659,7 +670,7 @@ use rayon::prelude::*;
         }
     ));
 
-    root.upcast()
+    paned.upcast()
 }
 
 fn rotate_selected(sel: &gtk::MultiSelection, store: &gio::ListStore, state: &State, delta: i32) {

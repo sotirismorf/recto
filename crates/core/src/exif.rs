@@ -14,8 +14,8 @@ pub enum Orientation {
     Rotate270,
 }
 
-impl Orientation {
-    pub fn from_tag(tag: u32) -> Self {
+impl From<u16> for Orientation {
+    fn from(tag: u16) -> Self {
         match tag {
             2 => Self::FlipH,
             3 => Self::Rotate180,
@@ -27,7 +27,9 @@ impl Orientation {
             _ => Self::Normal,
         }
     }
+}
 
+impl Orientation {
     pub fn apply(self, img: DynamicImage) -> DynamicImage {
         match self {
             Self::Normal => img,
@@ -43,16 +45,25 @@ impl Orientation {
 }
 
 pub fn read_orientation(path: &Path) -> Orientation {
-    let Ok(file) = std::fs::File::open(path) else { return Orientation::Normal };
-    let mut reader = std::io::BufReader::new(file);
-    let exif = match exif::Reader::new().read_from_container(&mut reader) {
-        Ok(e) => e,
-        Err(_) => return Orientation::Normal,
-    };
-    let field = match exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY) {
-        Some(f) => f,
-        None => return Orientation::Normal,
-    };
-    let tag = field.value.get_uint(0).unwrap_or(1);
-    Orientation::from_tag(tag)
+    let result: Option<Orientation> = std::fs::File::open(path)
+        .ok()
+        .and_then(|file| {
+            let mut reader = std::io::BufReader::new(file);
+            exif::Reader::new()
+                .read_from_container(&mut reader)
+                .ok()
+        })
+        .and_then(|exif| {
+            let field = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?;
+            field.value.get_uint(0)
+        })
+        .map(|tag| Orientation::from(tag as u16));
+
+    match result {
+        Some(o) => o,
+        None => {
+            tracing::debug!("no EXIF orientation found for {}", path.display());
+            Orientation::Normal
+        }
+    }
 }

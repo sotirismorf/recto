@@ -18,19 +18,6 @@ impl Rect {
         Self { x, y, w, h }
     }
 
-    pub fn from_box(b: CropBox) -> Self {
-        Self::new(b.x as f64, b.y as f64, b.w as f64, b.h as f64)
-    }
-
-    pub fn to_box(self) -> CropBox {
-        CropBox {
-            x: self.x.round().max(0.0) as u32,
-            y: self.y.round().max(0.0) as u32,
-            w: self.w.round().max(1.0) as u32,
-            h: self.h.round().max(1.0) as u32,
-        }
-    }
-
     /// Clamp position and size so the rect fits inside `0..iw, 0..ih`.
     /// `min` enforces a minimum width/height (use 1.0 for "any").
     pub fn clamp_to(self, iw: f64, ih: f64, min: f64) -> Self {
@@ -82,10 +69,29 @@ impl Rect {
     }
 }
 
+impl From<CropBox> for Rect {
+    fn from(b: CropBox) -> Self {
+        Self::new(b.x as f64, b.y as f64, b.w as f64, b.h as f64)
+    }
+}
+
+impl From<Rect> for CropBox {
+    fn from(r: Rect) -> Self {
+        Self {
+            x: r.x.round().max(0.0) as u32,
+            y: r.y.round().max(0.0) as u32,
+            w: r.w.round().clamp(1.0, u32::MAX as f64) as u32,
+            h: r.h.round().clamp(1.0, u32::MAX as f64) as u32,
+        }
+    }
+}
 
 pub fn output_dimensions(natural_w: f64, natural_h: f64, target_ar: f64) -> (u32, u32) {
     if natural_w <= 0.0 || natural_h <= 0.0 || target_ar <= 0.0 {
-        return (natural_w.max(1.0) as u32, natural_h.max(1.0) as u32);
+        return (
+            natural_w.max(1.0).round().clamp(1.0, u32::MAX as f64) as u32,
+            natural_h.max(1.0).round().clamp(1.0, u32::MAX as f64) as u32,
+        );
     }
     let natural_ar = natural_w / natural_h;
     let (w, h) = if natural_ar >= target_ar {
@@ -93,46 +99,46 @@ pub fn output_dimensions(natural_w: f64, natural_h: f64, target_ar: f64) -> (u32
     } else {
         (natural_w, natural_w / target_ar)
     };
-    (w.round().max(1.0) as u32, h.round().max(1.0) as u32)
+    (
+        w.round().clamp(1.0, u32::MAX as f64) as u32,
+        h.round().clamp(1.0, u32::MAX as f64) as u32,
+    )
+}
+
+fn median_sorted(xs: &[f64]) -> f64 {
+    debug_assert!(!xs.is_empty());
+    let n = xs.len();
+    if n % 2 == 1 {
+        xs[n / 2]
+    } else {
+        (xs[n / 2 - 1] + xs[n / 2]) / 2.0
+    }
 }
 
 pub fn median_aspect_ratio<I: IntoIterator<Item = (f64, f64)>>(dims: I) -> f64 {
     let mut ratios: Vec<f64> = dims
         .into_iter()
-        .filter(|(w, h)| *w > 0.0 && *h > 0.0)
+        .filter(|(w, h)| w.is_finite() && *w > 0.0 && h.is_finite() && *h > 0.0)
         .map(|(w, h)| w / h)
         .collect();
     if ratios.is_empty() {
         return 1.0;
     }
-    ratios.sort_by(|a, b| {
-        a.partial_cmp(b)
-            .expect("ratios are finite non-NaN")
-    });
-    let n = ratios.len();
-    if n % 2 == 1 {
-        ratios[n / 2]
-    } else {
-        (ratios[n / 2 - 1] + ratios[n / 2]) / 2.0
-    }
+    ratios.sort_by(f64::total_cmp);
+    median_sorted(&ratios)
 }
 
 pub fn outlier_indices(dims: &[(f64, f64)], threshold: f64) -> HashSet<usize> {
-    let valid: Vec<f64> = dims
+    let mut valid: Vec<f64> = dims
         .iter()
-        .filter(|(w, h)| *w > 0.0 && *h > 0.0)
+        .filter(|(w, h)| w.is_finite() && *w > 0.0 && h.is_finite() && *h > 0.0)
         .map(|(w, h)| w / h)
         .collect();
     if valid.len() < 3 {
         return HashSet::new();
     }
-    let mut sorted = valid.clone();
-    sorted.sort_by(|a, b| {
-        a.partial_cmp(b)
-            .expect("ratios are finite non-NaN")
-    });
-    let n = sorted.len();
-    let median = if n % 2 == 1 { sorted[n / 2] } else { (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0 };
+    valid.sort_by(f64::total_cmp);
+    let median = median_sorted(&valid);
     if median == 0.0 {
         return HashSet::new();
     }
@@ -185,9 +191,16 @@ mod tests {
 
     #[test]
     fn cropbox_round_trip() {
-        let b = CropBox { x: 12, y: 34, w: 100, h: 80 };
-        assert_eq!(Rect::from_box(b).to_box().x, b.x);
-        assert_eq!(Rect::from_box(b).to_box().w, b.w);
+        let b = CropBox {
+            x: 12,
+            y: 34,
+            w: 100,
+            h: 80,
+        };
+        let r: Rect = b.into();
+        let cb: CropBox = r.into();
+        assert_eq!(cb.x, b.x);
+        assert_eq!(cb.w, b.w);
     }
 
     #[test]
@@ -196,5 +209,23 @@ mod tests {
         assert!(r.contains((10.0, 10.0)));
         assert!(r.contains((110.0, 110.0)));
         assert!(!r.contains((9.9, 50.0)));
+    }
+
+    #[test]
+    fn median_aspect_ratio_ignores_nan() {
+        let dims = vec![(f64::NAN, 100.0), (200.0, 100.0), (300.0, 100.0)];
+        let m = median_aspect_ratio(dims);
+        assert!((m - 2.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn median_aspect_ratio_single() {
+        let m = median_aspect_ratio(vec![(200.0, 100.0)]);
+        assert!((m - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn median_aspect_ratio_empty() {
+        assert!((median_aspect_ratio(vec![]) - 1.0).abs() < 0.01);
     }
 }

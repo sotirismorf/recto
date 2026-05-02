@@ -14,6 +14,7 @@ serde_json.workspace = true
 image = "0.25"
 kamadak-exif = "0.6"
 rayon.workspace = true
+tempfile = "3"
 
 opencv = { version = "0.98", optional = true, default-features = false, features = ["imgproc", "imgcodecs"] }
 pdf-writer = "0.14"

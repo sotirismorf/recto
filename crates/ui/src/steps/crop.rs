@@ -347,7 +347,7 @@ impl CropPicker {
             (
                 page.path.clone(),
                 page.rotation as u32,
-                page.crop.map(Rect::from_box),
+                page.crop.map(Rect::from),
             )
         };
 
@@ -509,7 +509,7 @@ impl CropPicker {
     fn persist_crop(&self) {
         let s = self.state.borrow();
         let Some((state, index)) = s.binding.clone() else { return };
-        let crop = s.crop.map(|r| r.to_box());
+        let crop = s.crop.map(CropBox::from);
         drop(s);
         let mut project = state.borrow_mut();
         if let Some(page) = project.pages.get_mut(index) {
@@ -524,7 +524,7 @@ impl CropPicker {
             let s = self.state.borrow();
             let Some((state, index)) = s.binding.clone() else { return };
             let Some(rect) = s.crop else { return };
-            let cb = rect.to_box();
+            let cb = CropBox::from(rect);
             (state, index, cb.w, cb.h)
         };
         let mut project = state.borrow_mut();
@@ -1111,7 +1111,7 @@ fn refresh_preset_chips(
                         }
                         page.crop = Some(cb);
                         if new_first.is_none() {
-                            new_first = Some(Rect::from_box(cb));
+                            new_first = Some(Rect::from(cb));
                         }
                     }
                 }

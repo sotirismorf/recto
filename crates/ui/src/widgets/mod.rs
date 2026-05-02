@@ -1,2 +1,9 @@
+pub mod color_preview;
+pub mod crop_overlay;
+pub mod crop_picker;
+pub mod page_item;
+pub mod preset_chips;
 pub mod preview_canvas;
+pub mod thumbnail_grid;
+pub mod thumbnail_loader;
 pub mod zoom_pan;

@@ -4,25 +4,29 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use crate::app::{new_state, new_store, MarkDirty, Session, State};
-use crate::steps;
+use crate::app::{new_state, new_store, MarkDirty, Session};
+use crate::views;
+use crate::widgets::thumbnail_loader::*;
+use crate::widgets::page_item::PageItem;
 use crate::types::AppError;
+use crate::worker::Worker;
 
 pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
-    let state: State = new_state();
+    let (state, event_rx) = new_state();
     let session = Session::new(state.clone());
     let page_store = new_store();
+    let worker = Rc::new(Worker::new());
     // Shared selection — every tab's grid view models on the same selection,
     // so picking pages on import carries over to crop and colors.
     let selection = gtk::MultiSelection::new(Some(page_store.clone().upcast::<gio::ListModel>()));
-    let paned_sync = steps::PanedSync::new();
+    let paned_sync = views::PanedSync::new();
 
     let mark_dirty: MarkDirty = {
         let session = session.clone();
         Rc::new(move || session.mark_dirty())
     };
 
-    let (tx, rx) = async_channel::unbounded::<steps::import::LoadMsg>();
+    let (tx, rx) = async_channel::unbounded::<LoadMsg>();
     let pending_tasks = Rc::new(Cell::new(0));
     let spinner = gtk::Spinner::builder().visible(false).build();
     let count = gtk::Label::builder().label("0 images").build();
@@ -44,24 +48,20 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         tx,
         #[strong]
         mark_dirty,
+        #[strong]
+        worker,
         move |paths: Vec<PathBuf>| {
             use rayon::prelude::*;
             if paths.is_empty() {
                 return;
             }
             let start_index = page_store.n_items() as usize;
+            state.dispatch(recto_core::Command::AddPages(paths.clone()));
             for path in &paths {
-                let item = steps::page_item::PageItem::new_placeholder(path.clone());
+                let item = PageItem::new_placeholder(path.clone());
                 page_store.append(&item);
-                state.borrow_mut().pages.push(recto_core::project::Page {
-                    path: path.clone(),
-                    rotation: 0,
-                    crop: None,
-                    crop_preset: None,
-                    output: None,
-                });
             }
-            steps::import::update_count(&count, &state);
+            update_count(&count, &state);
             mark_dirty();
             pending_tasks.set(pending_tasks.get() + paths.len());
             spinner.set_visible(true);
@@ -74,14 +74,14 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
                 .map(|(i, p)| {
                     let item = page_store
                         .item((start_index + i) as u32)
-                        .and_downcast::<steps::page_item::PageItem>()
+                        .and_downcast::<PageItem>()
                         .expect("just appended");
                     (item.stable_id(), p.clone())
                 })
                 .collect();
 
             let tx = tx.clone();
-            std::thread::spawn(move || {
+            worker.spawn(move || {
                 paths_with_ids
                     .into_par_iter()
                     .for_each(|(id, path)| {
@@ -92,13 +92,13 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
                             gdk_pixbuf::Pixbuf::from_file_at_scale(&path, 256, 256, true)
                         {
                             let pb = pb.apply_embedded_orientation().unwrap_or(pb);
-                            let (orig_width, orig_height) = steps::import::exif_corrected_dims(
+                            let (orig_width, orig_height) = exif_corrected_dims(
                                 file_dims,
                                 pb.width(),
                                 pb.height(),
                             );
                             let bytes = pb.read_pixel_bytes();
-                            let data = steps::import::ThumbData {
+                            let data = ThumbData {
                                 bytes,
                                 width: pb.width(),
                                 height: pb.height(),
@@ -107,15 +107,15 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
                                 orig_width,
                                 orig_height,
                             };
-                            let _ = tx.send_blocking(steps::import::LoadMsg::Progress(id, data));
+                            let _ = tx.send_blocking(LoadMsg::Progress(id, data));
                         }
-                        let _ = tx.send_blocking(steps::import::LoadMsg::Finished);
+                        let _ = tx.send_blocking(LoadMsg::Finished);
                     });
             });
         }
     ));
 
-    let load_project: Rc<dyn Fn(recto_core::project::Project)> = Rc::new(glib::clone!(
+    let load_project: Rc<dyn Fn(recto_core::Project)> = Rc::new(glib::clone!(
         #[weak]
         page_store,
         #[strong]
@@ -128,21 +128,23 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         pending_tasks,
         #[strong]
         tx,
-        move |project: recto_core::project::Project| {
+        #[strong]
+        worker,
+        move |project: recto_core::Project| {
             use rayon::prelude::*;
             page_store.remove_all();
             let pages_info: Vec<(PathBuf, u32)> = project
                 .pages
                 .iter()
-                .map(|p| (p.path.clone(), p.rotation as u32))
+                .map(|p| (p.path.clone(), p.rotation.as_degrees() as u32))
                 .collect();
-            *state.borrow_mut() = project;
+            state.load_project(project);
             for (path, rotation) in &pages_info {
-                let item = steps::page_item::PageItem::new_placeholder(path.clone());
+                let item = PageItem::new_placeholder(path.clone());
                 item.set_rotation(*rotation);
                 page_store.append(&item);
             }
-            steps::import::update_count(&count, &state);
+            update_count(&count, &state);
             if pages_info.is_empty() {
                 return;
             }
@@ -153,7 +155,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
                 .map(|(i, (path, _))| {
                     let item = page_store
                         .item(i as u32)
-                        .and_downcast::<steps::page_item::PageItem>()
+                        .and_downcast::<PageItem>()
                         .expect("just appended");
                     (item.stable_id(), path.clone())
                 })
@@ -162,7 +164,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
             spinner.set_visible(true);
             spinner.start();
             let tx = tx.clone();
-            std::thread::spawn(move || {
+            worker.spawn(move || {
                 ids_with_paths
                     .into_par_iter()
                     .for_each(|(id, path)| {
@@ -173,13 +175,13 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
                             gdk_pixbuf::Pixbuf::from_file_at_scale(&path, 256, 256, true)
                         {
                             let pb = pb.apply_embedded_orientation().unwrap_or(pb);
-                            let (orig_width, orig_height) = steps::import::exif_corrected_dims(
+                            let (orig_width, orig_height) = exif_corrected_dims(
                                 file_dims,
                                 pb.width(),
                                 pb.height(),
                             );
                             let bytes = pb.read_pixel_bytes();
-                            let data = steps::import::ThumbData {
+                            let data = ThumbData {
                                 bytes,
                                 width: pb.width(),
                                 height: pb.height(),
@@ -188,9 +190,9 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
                                 orig_width,
                                 orig_height,
                             };
-                            let _ = tx.send_blocking(steps::import::LoadMsg::Progress(id, data));
+                            let _ = tx.send_blocking(LoadMsg::Progress(id, data));
                         }
-                        let _ = tx.send_blocking(steps::import::LoadMsg::Finished);
+                        let _ = tx.send_blocking(LoadMsg::Finished);
                     });
             });
         }
@@ -206,7 +208,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         async move {
             while let Ok(msg) = rx.recv().await {
                 match msg {
-                    steps::import::LoadMsg::Progress(id, data) => {
+                    LoadMsg::Progress(id, data) => {
                         let pb = gdk_pixbuf::Pixbuf::from_bytes(
                             &data.bytes,
                             gdk_pixbuf::Colorspace::Rgb,
@@ -221,7 +223,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
                             .filter_map(|i| {
                                 page_store
                                     .item(i)
-                                    .and_downcast::<steps::page_item::PageItem>()
+                                    .and_downcast::<PageItem>()
                             })
                             .find(|item| item.stable_id() == id);
                         if let Some(item) = item {
@@ -230,8 +232,8 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
                         }
                         // If not found: item was deleted before thumbnail arrived.
                     }
-                    steps::import::LoadMsg::Finished => {
-                        steps::import::decrement_pending(&pending_tasks, &spinner);
+                    LoadMsg::Finished => {
+                        decrement_pending(&pending_tasks, &spinner);
                     }
                 }
             }
@@ -240,7 +242,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
 
     // ---- Workspace (single unified view) ---------------------------------
 
-    let workspace = steps::workspace::build(
+    let workspace = crate::views::workspace::build(
         state.clone(),
         page_store.clone(),
         selection.clone(),
@@ -250,6 +252,8 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         Rc::clone(&load_images),
         Rc::clone(&load_project),
         Rc::clone(&mark_dirty),
+        Rc::clone(&worker),
+        event_rx,
     );
 
     // ---- Header bar -------------------------------------------------------
@@ -327,7 +331,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         let page_store = page_store.clone();
         let window = window.clone();
         Rc::new(
-            move |path: PathBuf| match recto_core::project::load_project(&path) {
+            move |path: PathBuf| match recto_core::io::project::load_project(&path) {
                 Ok(project) => {
                     page_store.remove_all();
                     load(project);
@@ -343,7 +347,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         )
     };
 
-    let start_page = steps::start::build(on_files.clone(), on_project.clone());
+    let start_page = crate::views::start::build(on_files.clone(), on_project.clone());
     main_stack.add_named(&start_page, Some("start"));
     main_stack.add_named(&workspace, Some("main"));
     main_stack.set_visible_child_name("start");
@@ -381,8 +385,8 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
             if path.extension().is_none() {
                 path = path.with_extension("pcut");
             }
-            let project = session.state().borrow().clone();
-            match recto_core::project::save_project(&project, &path) {
+            let project = session.state().project().clone();
+            match recto_core::io::project::save_project(&project, &path) {
                 Ok(()) => {
                     session.set_path(Some(&path));
                     session.clear_dirty();
@@ -519,7 +523,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
             confirm_discard(Rc::new(move || {
                 page_store.remove_all();
                 session.reset();
-                steps::import::update_count(&count, &state);
+                update_count(&count, &state);
                 enter_start();
             }));
         });
@@ -562,7 +566,31 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         let mark_dirty = mark_dirty.clone();
         let window = window.clone();
         act_export.connect_activate(move |_, _| {
-            steps::export::show_export_dialog(state.clone(), mark_dirty.clone(), window.upcast_ref::<gtk::Window>());
+            crate::views::export::show_export_dialog(state.clone(), mark_dirty.clone(), window.upcast_ref::<gtk::Window>(), Rc::clone(&worker));
+        });
+    }
+
+    // win.undo
+    let act_undo = gio::SimpleAction::new("undo", None);
+    {
+        let state = state.clone();
+        let mark_dirty = mark_dirty.clone();
+        act_undo.connect_activate(move |_, _| {
+            if state.undo() {
+                mark_dirty();
+            }
+        });
+    }
+
+    // win.redo
+    let act_redo = gio::SimpleAction::new("redo", None);
+    {
+        let state = state.clone();
+        let mark_dirty = mark_dirty.clone();
+        act_redo.connect_activate(move |_, _| {
+            if state.redo() {
+                mark_dirty();
+            }
         });
     }
 
@@ -572,12 +600,16 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
     actions.add_action(&act_save);
     actions.add_action(&act_save_as);
     actions.add_action(&act_export);
+    actions.add_action(&act_undo);
+    actions.add_action(&act_redo);
     window.insert_action_group("win", Some(&actions));
 
     app.set_accels_for_action("win.save", &["<Primary>s"]);
     app.set_accels_for_action("win.save-as", &["<Primary><Shift>s"]);
     app.set_accels_for_action("win.new", &["<Primary>n"]);
     app.set_accels_for_action("win.open", &["<Primary>o"]);
+    app.set_accels_for_action("win.undo", &["<Primary>z"]);
+    app.set_accels_for_action("win.redo", &["<Primary><Shift>z"]);
 
     // ---- Close confirmation ----------------------------------------------
 
@@ -607,7 +639,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
     window.present();
 
     if let Some(path) = project_path {
-        match recto_core::project::load_project(&path) {
+        match recto_core::io::project::load_project(&path) {
             Ok(project) => {
                 page_store.remove_all();
                 load_project(project);

@@ -1585,6 +1585,7 @@ name = "recto-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "dirs",
  "image",
  "kamadak-exif",

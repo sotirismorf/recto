@@ -1,8 +1,9 @@
 mod app;
-mod steps;
 mod types;
+mod views;
 mod widgets;
 mod window;
+mod worker;
 
 use adw::prelude::*;
 use clap::Parser;

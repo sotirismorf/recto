@@ -1,18 +1,20 @@
 use gtk::subclass::prelude::ObjectSubclassIsExt;
 use gtk::{gio, glib};
+use recto_core::command::{AppEvent, AppState};
 use recto_core::project::Project;
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use crate::steps::page_item::PageItem;
+use crate::widgets::page_item::PageItem;
 
-pub type State = Rc<RefCell<Project>>;
+pub type State = Rc<AppState>;
 
 pub type MarkDirty = Rc<dyn Fn()>;
 
-pub fn new_state() -> State {
-    Rc::new(RefCell::new(Project::default()))
+pub fn new_state() -> (State, async_channel::Receiver<AppEvent>) {
+    let (state, rx) = AppState::new(Project::default());
+    (Rc::new(state), rx)
 }
 
 pub fn new_store() -> gio::ListStore {
@@ -87,7 +89,7 @@ impl Session {
     }
 
     pub fn reset(&self) {
-        *self.state().borrow_mut() = Project::default();
+        self.state().clear();
         self.imp().path.replace(None);
         self.set_dirty(false);
         self.sync_display_name();

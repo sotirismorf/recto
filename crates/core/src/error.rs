@@ -19,9 +19,7 @@ pub enum Error {
     #[error("no config directory found")]
     NoConfigDir,
 
-    #[error(
-        "unsupported project version: file has {found}, this app supports up to {supported}"
-    )]
+    #[error("unsupported project version: file has {found}, this app supports up to {supported}")]
     UnsupportedProjectVersion { found: u32, supported: u32 },
 
     #[error("PDF export is not supported via run_batch; use export_to_pdf instead")]

@@ -13,8 +13,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
     let page_store = new_store();
     // Shared selection — every tab's grid view models on the same selection,
     // so picking pages on import carries over to crop and colors.
-    let selection =
-        gtk::MultiSelection::new(Some(page_store.clone().upcast::<gio::ListModel>()));
+    let selection = gtk::MultiSelection::new(Some(page_store.clone().upcast::<gio::ListModel>()));
     let paned_sync = steps::PanedSync::new();
 
     let mark_dirty: MarkDirty = {
@@ -30,13 +29,20 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
     // ---- Loaders ----------------------------------------------------------
 
     let load_images: Rc<dyn Fn(Vec<PathBuf>)> = Rc::new(glib::clone!(
-        #[weak] page_store,
-        #[strong] state,
-        #[weak] count,
-        #[weak] spinner,
-        #[strong] pending_tasks,
-        #[strong] tx,
-        #[strong] mark_dirty,
+        #[weak]
+        page_store,
+        #[strong]
+        state,
+        #[weak]
+        count,
+        #[weak]
+        spinner,
+        #[strong]
+        pending_tasks,
+        #[strong]
+        tx,
+        #[strong]
+        mark_dirty,
         move |paths: Vec<PathBuf>| {
             use rayon::prelude::*;
             if paths.is_empty() {
@@ -68,44 +74,52 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
 
             let tx = tx.clone();
             std::thread::spawn(move || {
-                paths_with_indices.into_par_iter().for_each(|(index, path)| {
-                    let file_dims = gdk_pixbuf::Pixbuf::file_info(&path)
-                        .map(|(_, w, h)| (w as u32, h as u32))
-                        .unwrap_or((0, 0));
-                    if let Ok(pb) =
-                        gdk_pixbuf::Pixbuf::from_file_at_scale(&path, 256, 256, true)
-                    {
-                        let pb = pb.apply_embedded_orientation().unwrap_or(pb);
-                        let (orig_width, orig_height) = steps::import::exif_corrected_dims(
-                            file_dims,
-                            pb.width(),
-                            pb.height(),
-                        );
-                        let bytes = pb.read_pixel_bytes();
-                        let data = steps::import::ThumbData {
-                            bytes,
-                            width: pb.width(),
-                            height: pb.height(),
-                            rowstride: pb.rowstride(),
-                            has_alpha: pb.has_alpha(),
-                            orig_width,
-                            orig_height,
-                        };
-                        let _ = tx.send_blocking(steps::import::LoadMsg::Progress(index, data));
-                    }
-                    let _ = tx.send_blocking(steps::import::LoadMsg::Finished);
-                });
+                paths_with_indices
+                    .into_par_iter()
+                    .for_each(|(index, path)| {
+                        let file_dims = gdk_pixbuf::Pixbuf::file_info(&path)
+                            .map(|(_, w, h)| (w as u32, h as u32))
+                            .unwrap_or((0, 0));
+                        if let Ok(pb) =
+                            gdk_pixbuf::Pixbuf::from_file_at_scale(&path, 256, 256, true)
+                        {
+                            let pb = pb.apply_embedded_orientation().unwrap_or(pb);
+                            let (orig_width, orig_height) = steps::import::exif_corrected_dims(
+                                file_dims,
+                                pb.width(),
+                                pb.height(),
+                            );
+                            let bytes = pb.read_pixel_bytes();
+                            let data = steps::import::ThumbData {
+                                bytes,
+                                width: pb.width(),
+                                height: pb.height(),
+                                rowstride: pb.rowstride(),
+                                has_alpha: pb.has_alpha(),
+                                orig_width,
+                                orig_height,
+                            };
+                            let _ = tx.send_blocking(steps::import::LoadMsg::Progress(index, data));
+                        }
+                        let _ = tx.send_blocking(steps::import::LoadMsg::Finished);
+                    });
             });
         }
     ));
 
     let load_project: Rc<dyn Fn(recto_core::project::Project)> = Rc::new(glib::clone!(
-        #[weak] page_store,
-        #[strong] state,
-        #[weak] count,
-        #[weak] spinner,
-        #[strong] pending_tasks,
-        #[strong] tx,
+        #[weak]
+        page_store,
+        #[strong]
+        state,
+        #[weak]
+        count,
+        #[weak]
+        spinner,
+        #[strong]
+        pending_tasks,
+        #[strong]
+        tx,
         move |project: recto_core::project::Project| {
             use rayon::prelude::*;
             page_store.remove_all();
@@ -130,41 +144,46 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
             spinner.start();
             let tx = tx.clone();
             std::thread::spawn(move || {
-                pages_info.into_par_iter().for_each(|(index, path, _rotation)| {
-                    let file_dims = gdk_pixbuf::Pixbuf::file_info(&path)
-                        .map(|(_, w, h)| (w as u32, h as u32))
-                        .unwrap_or((0, 0));
-                    if let Ok(pb) =
-                        gdk_pixbuf::Pixbuf::from_file_at_scale(&path, 256, 256, true)
-                    {
-                        let pb = pb.apply_embedded_orientation().unwrap_or(pb);
-                        let (orig_width, orig_height) = steps::import::exif_corrected_dims(
-                            file_dims,
-                            pb.width(),
-                            pb.height(),
-                        );
-                        let bytes = pb.read_pixel_bytes();
-                        let data = steps::import::ThumbData {
-                            bytes,
-                            width: pb.width(),
-                            height: pb.height(),
-                            rowstride: pb.rowstride(),
-                            has_alpha: pb.has_alpha(),
-                            orig_width,
-                            orig_height,
-                        };
-                        let _ = tx.send_blocking(steps::import::LoadMsg::Progress(index, data));
-                    }
-                    let _ = tx.send_blocking(steps::import::LoadMsg::Finished);
-                });
+                pages_info
+                    .into_par_iter()
+                    .for_each(|(index, path, _rotation)| {
+                        let file_dims = gdk_pixbuf::Pixbuf::file_info(&path)
+                            .map(|(_, w, h)| (w as u32, h as u32))
+                            .unwrap_or((0, 0));
+                        if let Ok(pb) =
+                            gdk_pixbuf::Pixbuf::from_file_at_scale(&path, 256, 256, true)
+                        {
+                            let pb = pb.apply_embedded_orientation().unwrap_or(pb);
+                            let (orig_width, orig_height) = steps::import::exif_corrected_dims(
+                                file_dims,
+                                pb.width(),
+                                pb.height(),
+                            );
+                            let bytes = pb.read_pixel_bytes();
+                            let data = steps::import::ThumbData {
+                                bytes,
+                                width: pb.width(),
+                                height: pb.height(),
+                                rowstride: pb.rowstride(),
+                                has_alpha: pb.has_alpha(),
+                                orig_width,
+                                orig_height,
+                            };
+                            let _ = tx.send_blocking(steps::import::LoadMsg::Progress(index, data));
+                        }
+                        let _ = tx.send_blocking(steps::import::LoadMsg::Finished);
+                    });
             });
         }
     ));
 
     glib::MainContext::default().spawn_local(glib::clone!(
-        #[weak] page_store,
-        #[weak] spinner,
-        #[strong] pending_tasks,
+        #[weak]
+        page_store,
+        #[weak]
+        spinner,
+        #[strong]
+        pending_tasks,
         async move {
             while let Ok(msg) = rx.recv().await {
                 match msg {
@@ -328,8 +347,8 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         let enter_main = Rc::clone(&enter_main);
         let session = session.clone();
         let page_store = page_store.clone();
-        Rc::new(move |path: PathBuf| {
-            match recto_core::project::load_project(&path) {
+        Rc::new(
+            move |path: PathBuf| match recto_core::project::load_project(&path) {
                 Ok(project) => {
                     page_store.remove_all();
                     load(project);
@@ -338,8 +357,8 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
                     enter_main();
                 }
                 Err(e) => tracing::error!("open project: {e}"),
-            }
-        })
+            },
+        )
     };
 
     let start_page = steps::start::build(on_files.clone(), on_project.clone());
@@ -444,17 +463,15 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         let session = session.clone();
         let save_to = save_to.clone();
         let save_as = save_as.clone();
-        Rc::new(move |after: Option<Rc<dyn Fn()>>| {
-            match session.path() {
-                Some(p) => {
-                    if save_to(p) {
-                        if let Some(after) = after {
-                            after();
-                        }
+        Rc::new(move |after: Option<Rc<dyn Fn()>>| match session.path() {
+            Some(p) => {
+                if save_to(p) {
+                    if let Some(after) = after {
+                        after();
                     }
                 }
-                None => save_as(after),
             }
+            None => save_as(after),
         }) as Rc<dyn Fn(Option<Rc<dyn Fn()>>)>
     };
 
@@ -604,7 +621,13 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
 
     if let Some(path) = project_path {
         match recto_core::project::load_project(&path) {
-            Ok(project) => load_project(project),
+            Ok(project) => {
+                page_store.remove_all();
+                load_project(project);
+                session.set_path(Some(&path));
+                session.clear_dirty();
+                enter_main();
+            }
             Err(e) => tracing::error!("Failed to load project {:?}: {}", path, e),
         }
     }

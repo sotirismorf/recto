@@ -122,8 +122,8 @@ impl ZoomPanController {
                     Some(gdk::ScrollUnit::Wheel)
                 );
                 let factor = (-dy * if is_wheel { 0.30 } else { 0.10 }).exp();
-                let new_t = (this.target_zoom.get() * factor)
-                    .clamp(this.fit_zoom.get(), this.cfg.max_zoom);
+                let new_t =
+                    (this.target_zoom.get() * factor).clamp(this.fit_zoom.get(), this.cfg.max_zoom);
                 if (new_t - this.target_zoom.get()).abs() < 1e-9 {
                     return glib::Propagation::Stop;
                 }
@@ -146,7 +146,9 @@ impl ZoomPanController {
             let this = this.clone();
             let pan_start = pan_start.clone();
             move |_, _, _| {
-                let Some(c) = this.canvas.upgrade() else { return };
+                let Some(c) = this.canvas.upgrade() else {
+                    return;
+                };
                 this.pause_anim();
                 let z = c.zoom();
                 let p = c.pan();
@@ -158,7 +160,9 @@ impl ZoomPanController {
         pan_drag.connect_drag_update({
             let this = this.clone();
             move |_, dx, dy| {
-                let Some(c) = this.canvas.upgrade() else { return };
+                let Some(c) = this.canvas.upgrade() else {
+                    return;
+                };
                 let (sx, sy) = pan_start.get();
                 let mut p = (sx + dx, sy + dy);
                 let (img_w, img_h) = c.texture_size();
@@ -215,7 +219,9 @@ impl ZoomPanController {
     /// snaps to fit.
     pub fn refit_after_texture_change(&self) {
         self.pause_anim();
-        let Some(c) = self.canvas.upgrade() else { return };
+        let Some(c) = self.canvas.upgrade() else {
+            return;
+        };
         self.recompute_fit(c.width(), c.height(), false);
     }
 
@@ -232,7 +238,9 @@ impl ZoomPanController {
     }
 
     fn recompute_fit(&self, alloc_w: i32, alloc_h: i32, force_reset: bool) {
-        let Some(c) = self.canvas.upgrade() else { return };
+        let Some(c) = self.canvas.upgrade() else {
+            return;
+        };
         let (iw, ih) = c.texture_size();
         let aw = alloc_w as f64;
         let ah = alloc_h as f64;
@@ -266,7 +274,9 @@ impl ZoomPanController {
     }
 
     fn zoom_to_animated(self: &Rc<Self>, new_z: f64, cx: f64, cy: f64) {
-        let Some(c) = self.canvas.upgrade() else { return };
+        let Some(c) = self.canvas.upgrade() else {
+            return;
+        };
         let z0 = c.zoom();
         let (px0, py0) = c.pan();
         if z0 <= 0.0 || new_z <= 0.0 {
@@ -312,7 +322,9 @@ impl ZoomPanController {
     }
 
     fn zoom_to_instant(&self, new_z: f64, cx: f64, cy: f64) {
-        let Some(c) = self.canvas.upgrade() else { return };
+        let Some(c) = self.canvas.upgrade() else {
+            return;
+        };
         let z0 = c.zoom();
         let (px0, py0) = c.pan();
         if z0 <= 0.0 {

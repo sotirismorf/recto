@@ -61,10 +61,22 @@ pub fn build(state: State, mark_dirty: MarkDirty) -> gtk::Widget {
     prefix_row.append(&prefix_entry);
 
     // --- Format toggle group ------------------------------------------------
-    let btn_jpeg = gtk::ToggleButton::builder().label("JPEG").active(true).build();
-    let btn_png = gtk::ToggleButton::builder().label("PNG").group(&btn_jpeg).build();
-    let btn_tiff = gtk::ToggleButton::builder().label("TIFF").group(&btn_jpeg).build();
-    let btn_pdf = gtk::ToggleButton::builder().label("PDF").group(&btn_jpeg).build();
+    let btn_jpeg = gtk::ToggleButton::builder()
+        .label("JPEG")
+        .active(true)
+        .build();
+    let btn_png = gtk::ToggleButton::builder()
+        .label("PNG")
+        .group(&btn_jpeg)
+        .build();
+    let btn_tiff = gtk::ToggleButton::builder()
+        .label("TIFF")
+        .group(&btn_jpeg)
+        .build();
+    let btn_pdf = gtk::ToggleButton::builder()
+        .label("PDF")
+        .group(&btn_jpeg)
+        .build();
 
     {
         let p = state.borrow();
@@ -323,8 +335,7 @@ pub fn build(state: State, mark_dirty: MarkDirty) -> gtk::Widget {
 
             if matches!(format, ExportSettings::Pdf { .. }) {
                 let meta = pdf_meta.borrow().clone();
-                let out_path =
-                    project.output_dir.join(format!("{}.pdf", project.prefix));
+                let out_path = project.output_dir.join(format!("{}.pdf", project.prefix));
                 std::thread::spawn(move || {
                     let total = project.pages.len();
                     let result = recto_core::pipeline::export_to_pdf(
@@ -351,10 +362,9 @@ pub fn build(state: State, mark_dirty: MarkDirty) -> gtk::Widget {
             } else {
                 std::thread::spawn(move || {
                     let total = project.pages.len();
-                    let results =
-                        recto_core::pipeline::run_batch(&project, |done, _| {
-                            let _ = tx.send_blocking(ExportMsg::Progress(done, total));
-                        });
+                    let results = recto_core::pipeline::run_batch(&project, |done, _| {
+                        let _ = tx.send_blocking(ExportMsg::Progress(done, total));
+                    });
                     let lines: Vec<(bool, String)> = results
                         .into_iter()
                         .map(|r| match r {
@@ -392,10 +402,8 @@ pub fn build(state: State, mark_dirty: MarkDirty) -> gtk::Widget {
                             let prefix = if *success { "✓ " } else { "✗ " };
                             result_buf.insert(&mut end, &format!("{}{}\n", prefix, msg));
                         }
-                        result_buf.insert(
-                            &mut end,
-                            &format!("\nDone: {}/{} succeeded.\n", ok, total),
-                        );
+                        result_buf
+                            .insert(&mut end, &format!("\nDone: {}/{} succeeded.\n", ok, total));
                     }
                 }
             }
@@ -429,10 +437,7 @@ fn show_pdf_meta_dialog(parent: Option<gtk::Window>, meta_rc: Rc<RefCell<PdfMeta
 
     let make_row = |grid: &gtk::Grid, row: i32, label: &str, value: &str| -> gtk::Entry {
         let lbl = gtk::Label::builder().label(label).xalign(1.0).build();
-        let entry = gtk::Entry::builder()
-            .text(value)
-            .hexpand(true)
-            .build();
+        let entry = gtk::Entry::builder().text(value).hexpand(true).build();
         grid.attach(&lbl, 0, row, 1, 1);
         grid.attach(&entry, 1, row, 1, 1);
         entry

@@ -69,7 +69,7 @@ pub fn build(
             if let Ok(pb) = gdk_pixbuf::Pixbuf::from_file(&path) {
                 let pb = pb.apply_embedded_orientation().unwrap_or(pb);
                 let pb = super::page_item::rotate(&pb, rotation);
-                
+
                 let bytes = pb.read_pixel_bytes();
                 let data = ThumbData {
                     bytes,
@@ -80,7 +80,7 @@ pub fn build(
                     orig_width: pb.width() as u32,
                     orig_height: pb.height() as u32,
                 };
-                
+
                 let _ = tx_prev_res.send_blocking((id, data));
             }
         }
@@ -166,7 +166,9 @@ pub fn build(
         let zoom_pan = zoom_pan.clone();
         async move {
             while let Ok((id, data)) = rx_prev_res.recv().await {
-                if id != preview_req_id.get() { continue; }
+                if id != preview_req_id.get() {
+                    continue;
+                }
                 let pb = gdk_pixbuf::Pixbuf::from_bytes(
                     &data.bytes,
                     gdk_pixbuf::Colorspace::Rgb,
@@ -177,7 +179,9 @@ pub fn build(
                     data.rowstride,
                 );
                 let tex = gdk::Texture::for_pixbuf(&pb);
-                let Some(preview) = preview_weak.upgrade() else { continue; };
+                let Some(preview) = preview_weak.upgrade() else {
+                    continue;
+                };
                 preview.set_texture(Some(tex));
                 zoom_pan.refit_after_texture_change();
             }
@@ -189,12 +193,16 @@ pub fn build(
 
     let click_gesture = gtk::GestureClick::builder().build();
     click_gesture.connect_pressed(glib::clone!(
-        #[weak] selection,
+        #[weak]
+        selection,
         move |gesture, n_press, x, y| {
             if n_press == 1 {
                 if let Some(widget) = gesture.widget() {
                     if let Some(target) = widget.pick(x, y, gtk::PickFlags::DEFAULT) {
-                        if target.is::<gtk::GridView>() || target.is::<gtk::Viewport>() || target.is::<gtk::ScrolledWindow>() {
+                        if target.is::<gtk::GridView>()
+                            || target.is::<gtk::Viewport>()
+                            || target.is::<gtk::ScrolledWindow>()
+                        {
                             selection.unselect_all();
                         }
                     }
@@ -224,14 +232,22 @@ pub fn build(
     paned_sync.register(&paned);
 
     selection.connect_selection_changed(glib::clone!(
-        #[strong] selection,
-        #[weak] preview,
-        #[strong] preview_req_id,
-        #[strong] tx_prev,
-        #[weak] rotate_ccw,
-        #[weak] rotate_cw,
-        #[weak] rotate_180,
-        #[weak] delete_btn,
+        #[strong]
+        selection,
+        #[weak]
+        preview,
+        #[strong]
+        preview_req_id,
+        #[strong]
+        tx_prev,
+        #[weak]
+        rotate_ccw,
+        #[weak]
+        rotate_cw,
+        #[weak]
+        rotate_180,
+        #[weak]
+        delete_btn,
         move |_, _, _| {
             let positions = selected_positions(&selection);
             let any = !positions.is_empty();
@@ -346,14 +362,20 @@ pub fn build(
     ));
 
     rotate_ccw.connect_clicked(glib::clone!(
-        #[strong] state,
-        #[weak] store,
-        #[strong] selection,
-        #[weak] preview,
-
-        #[strong] preview_req_id,
-        #[strong] tx_prev,
-        #[strong] mark_dirty,
+        #[strong]
+        state,
+        #[weak]
+        store,
+        #[strong]
+        selection,
+        #[weak]
+        preview,
+        #[strong]
+        preview_req_id,
+        #[strong]
+        tx_prev,
+        #[strong]
+        mark_dirty,
         move |_| {
             rotate_selected(&selection, &store, &state, -90);
             update_preview(&selection, &preview, &preview_req_id, &tx_prev);
@@ -361,14 +383,20 @@ pub fn build(
         }
     ));
     rotate_cw.connect_clicked(glib::clone!(
-        #[strong] state,
-        #[weak] store,
-        #[strong] selection,
-        #[weak] preview,
-
-        #[strong] preview_req_id,
-        #[strong] tx_prev,
-        #[strong] mark_dirty,
+        #[strong]
+        state,
+        #[weak]
+        store,
+        #[strong]
+        selection,
+        #[weak]
+        preview,
+        #[strong]
+        preview_req_id,
+        #[strong]
+        tx_prev,
+        #[strong]
+        mark_dirty,
         move |_| {
             rotate_selected(&selection, &store, &state, 90);
             update_preview(&selection, &preview, &preview_req_id, &tx_prev);
@@ -376,14 +404,20 @@ pub fn build(
         }
     ));
     rotate_180.connect_clicked(glib::clone!(
-        #[strong] state,
-        #[weak] store,
-        #[strong] selection,
-        #[weak] preview,
-
-        #[strong] preview_req_id,
-        #[strong] tx_prev,
-        #[strong] mark_dirty,
+        #[strong]
+        state,
+        #[weak]
+        store,
+        #[strong]
+        selection,
+        #[weak]
+        preview,
+        #[strong]
+        preview_req_id,
+        #[strong]
+        tx_prev,
+        #[strong]
+        mark_dirty,
         move |_| {
             rotate_selected(&selection, &store, &state, 180);
             update_preview(&selection, &preview, &preview_req_id, &tx_prev);
@@ -392,15 +426,22 @@ pub fn build(
     ));
 
     delete_btn.connect_clicked(glib::clone!(
-        #[strong] state,
-        #[weak] store,
-        #[strong] selection,
-        #[weak] count,
-        #[weak] preview,
-
-        #[strong] preview_req_id,
-        #[strong] tx_prev,
-        #[strong] mark_dirty,
+        #[strong]
+        state,
+        #[weak]
+        store,
+        #[strong]
+        selection,
+        #[weak]
+        count,
+        #[weak]
+        preview,
+        #[strong]
+        preview_req_id,
+        #[strong]
+        tx_prev,
+        #[strong]
+        mark_dirty,
         move |_| {
             let mut positions = selected_positions(&selection);
             positions.sort_unstable_by(|a, b| b.cmp(a));

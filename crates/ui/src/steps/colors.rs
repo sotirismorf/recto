@@ -43,7 +43,9 @@ pub fn build(
             while let Ok(next) = rx_req.try_recv() {
                 req = next;
             }
-            let Some(result) = render_preview(&req) else { continue };
+            let Some(result) = render_preview(&req) else {
+                continue;
+            };
             let _ = tx_res.send_blocking(result);
         }
     });
@@ -135,7 +137,9 @@ pub fn build(
         let req_id = req_id.clone();
         async move {
             while let Ok(result) = rx_res.recv().await {
-                if result.id != req_id.get() { continue; }
+                if result.id != req_id.get() {
+                    continue;
+                }
                 let pb = gdk_pixbuf::Pixbuf::from_bytes(
                     &result.bytes,
                     gdk_pixbuf::Colorspace::Rgb,
@@ -145,7 +149,9 @@ pub fn build(
                     result.height,
                     result.rowstride,
                 );
-                let Some(preview) = preview_weak.upgrade() else { continue };
+                let Some(preview) = preview_weak.upgrade() else {
+                    continue;
+                };
                 preview.set_texture(Some(gdk::Texture::for_pixbuf(&pb)));
                 zoom_pan.refit_after_texture_change();
             }
@@ -242,7 +248,9 @@ fn send_preview_req(
         }
     };
     let project = state.borrow();
-    let Some(page) = project.pages.get(first) else { return };
+    let Some(page) = project.pages.get(first) else {
+        return;
+    };
     let id = req_id.get().wrapping_add(1);
     req_id.set(id);
     let req = ColorReq {
@@ -290,7 +298,8 @@ fn scale_down(pb: gdk_pixbuf::Pixbuf, max_px: i32) -> gdk_pixbuf::Pixbuf {
     let s = (max_px as f64 / pb.width() as f64).min(max_px as f64 / pb.height() as f64);
     let nw = ((pb.width() as f64 * s).round() as i32).max(1);
     let nh = ((pb.height() as f64 * s).round() as i32).max(1);
-    pb.scale_simple(nw, nh, gdk_pixbuf::InterpType::Bilinear).unwrap_or(pb)
+    pb.scale_simple(nw, nh, gdk_pixbuf::InterpType::Bilinear)
+        .unwrap_or(pb)
 }
 
 fn adjust_colors(pb: gdk_pixbuf::Pixbuf, brightness: f32, contrast: f32) -> gdk_pixbuf::Pixbuf {

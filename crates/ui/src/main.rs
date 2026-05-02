@@ -16,6 +16,9 @@ struct Cli {
     project: Option<std::path::PathBuf>,
     #[arg(long)]
     headless: bool,
+    /// Open a project file (passed by file manager when double-clicked)
+    #[arg()]
+    file: Option<std::path::PathBuf>,
 }
 
 fn main() -> glib::ExitCode {
@@ -34,7 +37,7 @@ fn main() -> glib::ExitCode {
         return glib::ExitCode::SUCCESS;
     }
 
-    let project_path = Rc::new(Cell::new(cli.project));
+    let project_path = Rc::new(Cell::new(cli.project.or(cli.file)));
 
     let app = adw::Application::builder()
         .application_id("io.github.sotirismorf.Recto")
@@ -42,18 +45,28 @@ fn main() -> glib::ExitCode {
         .build();
 
     app.connect_open(glib::clone!(
-        #[strong] project_path,
-        move |_app, files, _hint| {
-            if let Some(file) = files.first() {
-                if let Some(path) = file.path() {
+        #[strong]
+        project_path,
+        move |app, files, _hint| {
+            for file in files {
+                let maybe_path = file.path().or_else(|| {
+                    let uri = file.uri();
+                    tracing::info!("Open URI (not a local path): {uri}");
+                    None
+                });
+                if let Some(path) = maybe_path {
+                    tracing::info!("Opening project from file association: {path:?}");
                     project_path.set(Some(path));
+                    break;
                 }
             }
+            app.activate();
         }
     ));
 
     app.connect_activate(glib::clone!(
-        #[strong] project_path,
+        #[strong]
+        project_path,
         move |app| {
             window::build(app, project_path.take());
         }

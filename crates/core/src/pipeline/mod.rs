@@ -115,8 +115,7 @@ where
             .bits_per_component(8)
             .filter(Filter::DctDecode);
 
-        let content =
-            format!("q\n{w_pt:.4} 0 0 {h_pt:.4} 0 0 cm\n/Im Do\nQ\n");
+        let content = format!("q\n{w_pt:.4} 0 0 {h_pt:.4} 0 0 cm\n/Im Do\nQ\n");
         pdf.stream(content_ref, content.as_bytes());
 
         let mut page = pdf.page(page_ref);

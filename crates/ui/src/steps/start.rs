@@ -3,22 +3,14 @@ use gtk::{gdk, gdk_pixbuf, gio, glib};
 use std::path::PathBuf;
 use std::rc::Rc;
 
-pub fn build(
-    on_files: Rc<dyn Fn(Vec<PathBuf>)>,
-    on_project: Rc<dyn Fn(PathBuf)>,
-) -> gtk::Widget {
+pub fn build(on_files: Rc<dyn Fn(Vec<PathBuf>)>, on_project: Rc<dyn Fn(PathBuf)>) -> gtk::Widget {
     // Render the SVG much larger than its display size so the GPU
     // downscales it cleanly instead of showing pixelated edges.
     let logo_bytes = include_bytes!("../logo.svg");
     let stream = gio::MemoryInputStream::from_bytes(&glib::Bytes::from(&logo_bytes[..]));
-    let pixbuf = gdk_pixbuf::Pixbuf::from_stream_at_scale(
-        &stream,
-        1024,
-        1024,
-        true,
-        gio::Cancellable::NONE,
-    )
-    .expect("Failed to load embedded logo");
+    let pixbuf =
+        gdk_pixbuf::Pixbuf::from_stream_at_scale(&stream, 1024, 1024, true, gio::Cancellable::NONE)
+            .expect("Failed to load embedded logo");
     let logo_texture = gdk::Texture::for_pixbuf(&pixbuf);
 
     // ---------- Left side: brand ----------
@@ -92,7 +84,8 @@ pub fn build(
         .build();
 
     drop_btn.connect_clicked(glib::clone!(
-        #[strong] on_files,
+        #[strong]
+        on_files,
         move |btn| {
             let dialog = gtk::FileDialog::builder()
                 .title("Add page images")
@@ -117,7 +110,8 @@ pub fn build(
                 parent.as_ref(),
                 gio::Cancellable::NONE,
                 glib::clone!(
-                    #[strong] on_files,
+                    #[strong]
+                    on_files,
                     move |result| {
                         let Ok(files) = result else { return };
                         let mut paths = Vec::new();
@@ -166,7 +160,8 @@ pub fn build(
         .build();
 
     project_btn.connect_clicked(glib::clone!(
-        #[strong] on_project,
+        #[strong]
+        on_project,
         move |btn| {
             let dialog = gtk::FileDialog::builder()
                 .title("Open Project")
@@ -183,7 +178,8 @@ pub fn build(
                 parent.as_ref(),
                 gio::Cancellable::NONE,
                 glib::clone!(
-                    #[strong] on_project,
+                    #[strong]
+                    on_project,
                     move |result| {
                         let Ok(file) = result else { return };
                         let Some(path) = file.path() else { return };

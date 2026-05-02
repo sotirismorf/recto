@@ -60,7 +60,9 @@ pub fn read_orientation(path: &Path) -> Orientation {
         let mut reader = std::io::BufReader::new(file);
         let exif = exif::Reader::new()
             .read_from_container(&mut reader)
-            .inspect_err(|e| tracing::warn!("cannot parse EXIF for {path}: {e}", path = path.display()))
+            .inspect_err(|e| {
+                tracing::warn!("cannot parse EXIF for {path}: {e}", path = path.display())
+            })
             .ok()?;
         let field = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?;
         let tag = field.value.get_uint(0)?;

@@ -17,7 +17,9 @@ pub const CARD_CHARS: i32 = 18;
 pub fn install_grid_css() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
-        let Some(display) = gdk::Display::default() else { return };
+        let Some(display) = gdk::Display::default() else {
+            return;
+        };
         let provider = gtk::CssProvider::new();
         provider.load_from_string(
             ".photo-grid > child { margin: 6px; padding: 8px; border-radius: 8px; }",

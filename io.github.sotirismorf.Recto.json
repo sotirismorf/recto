@@ -12,7 +12,8 @@
         "--socket=fallback-x11",
         "--share=ipc",
         "--device=dri",
-        "--filesystem=home"
+        "--filesystem=home",
+        "--own-name=io.github.sotirismorf.Recto"
     ],
     "modules": [
         {

@@ -113,8 +113,11 @@ impl Handle {
                 let dx = end.0 - start.0;
                 let dy = end.1 - start.1;
                 Some(
-                    Rect::new(initial.x + dx, initial.y + dy, initial.w, initial.h)
-                        .clamp_to(iw, ih, MIN_CROP_PX),
+                    Rect::new(initial.x + dx, initial.y + dy, initial.w, initial.h).clamp_to(
+                        iw,
+                        ih,
+                        MIN_CROP_PX,
+                    ),
                 )
             }
             Handle::Corner(c) => {
@@ -197,10 +200,7 @@ pub struct CropPicker {
 
 impl CropPicker {
     pub fn new() -> Rc<Self> {
-        let overlay = gtk::Overlay::builder()
-            .hexpand(true)
-            .vexpand(true)
-            .build();
+        let overlay = gtk::Overlay::builder().hexpand(true).vexpand(true).build();
         let canvas = PreviewCanvas::new();
         canvas.add_css_class("view");
         overlay.set_child(Some(&canvas));
@@ -358,12 +358,15 @@ impl CropPicker {
 
         {
             let mut s = self.state.borrow_mut();
-            s.image_dims = pb.as_ref().map(|pb| (pb.width() as f64, pb.height() as f64));
+            s.image_dims = pb
+                .as_ref()
+                .map(|pb| (pb.width() as f64, pb.height() as f64));
             s.crop = crop;
             s.binding = Some((state, index));
         }
 
-        self.canvas.set_texture(pb.as_ref().map(gdk::Texture::for_pixbuf));
+        self.canvas
+            .set_texture(pb.as_ref().map(gdk::Texture::for_pixbuf));
         self.zoom_pan.refit_after_texture_change();
         self.area.queue_draw();
     }
@@ -394,7 +397,9 @@ impl CropPicker {
     }
 
     fn on_drag_begin(&self, x: f64, y: f64) {
-        let Some(img_pos) = self.widget_to_image(x, y) else { return };
+        let Some(img_pos) = self.widget_to_image(x, y) else {
+            return;
+        };
         let (z, _, _) = self.canvas.transform();
         let mut s = self.state.borrow_mut();
 
@@ -434,7 +439,9 @@ impl CropPicker {
     }
 
     fn on_drag_update(&self, end_wx: f64, end_wy: f64) {
-        let Some(end_img) = self.widget_to_image(end_wx, end_wy) else { return };
+        let Some(end_img) = self.widget_to_image(end_wx, end_wy) else {
+            return;
+        };
         let mut s = self.state.borrow_mut();
         let Some(d) = s.drag else { return };
         let Some((iw, ih)) = s.image_dims else { return };
@@ -497,10 +504,19 @@ impl CropPicker {
         drop(s);
         let (z, _, _) = self.canvas.transform();
         let h = if locked {
-            if rect.contains(img_pos) { Some(Handle::Move) } else { None }
+            if rect.contains(img_pos) {
+                Some(Handle::Move)
+            } else {
+                None
+            }
         } else {
-            Handle::pick(rect, img_pos, z)
-                .or_else(|| if rect.contains(img_pos) { Some(Handle::Move) } else { None })
+            Handle::pick(rect, img_pos, z).or_else(|| {
+                if rect.contains(img_pos) {
+                    Some(Handle::Move)
+                } else {
+                    None
+                }
+            })
         };
         let cursor = h.and_then(|h| gdk::Cursor::from_name(h.cursor_name(), None));
         self.area.set_cursor(cursor.as_ref());
@@ -508,7 +524,9 @@ impl CropPicker {
 
     fn persist_crop(&self) {
         let s = self.state.borrow();
-        let Some((state, index)) = s.binding.clone() else { return };
+        let Some((state, index)) = s.binding.clone() else {
+            return;
+        };
         let crop = s.crop.map(CropBox::from);
         drop(s);
         let mut project = state.borrow_mut();
@@ -522,14 +540,20 @@ impl CropPicker {
     fn sync_preset_from_drag(&self) {
         let (state, index, w, h) = {
             let s = self.state.borrow();
-            let Some((state, index)) = s.binding.clone() else { return };
+            let Some((state, index)) = s.binding.clone() else {
+                return;
+            };
             let Some(rect) = s.crop else { return };
             let cb = CropBox::from(rect);
             (state, index, cb.w, cb.h)
         };
         let mut project = state.borrow_mut();
-        let Some(pi) = project.pages.get(index).and_then(|p| p.crop_preset) else { return };
-        let Some(preset) = project.crop_presets.get_mut(pi) else { return };
+        let Some(pi) = project.pages.get(index).and_then(|p| p.crop_preset) else {
+            return;
+        };
+        let Some(preset) = project.crop_presets.get_mut(pi) else {
+            return;
+        };
         if preset.locked {
             return;
         }
@@ -553,10 +577,14 @@ impl CropPicker {
         }
         let Some(rect) = s.crop else { return };
 
-        let (cr_r, cr_g, cr_b) = s.binding.as_ref()
+        let (cr_r, cr_g, cr_b) = s
+            .binding
+            .as_ref()
             .and_then(|(state, index)| {
                 let project = state.borrow();
-                project.pages.get(*index)
+                project
+                    .pages
+                    .get(*index)
                     .and_then(|p| p.crop_preset)
                     .map(preset_color_rgb)
             })
@@ -663,7 +691,8 @@ pub fn build(
     // --- Grid view (right side, mirrors import step layout) -------------
 
     let selected_indices: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(Vec::new()));
-    let overlays: Rc<RefCell<Vec<glib::WeakRef<gtk::DrawingArea>>>> = Rc::new(RefCell::new(Vec::new()));
+    let overlays: Rc<RefCell<Vec<glib::WeakRef<gtk::DrawingArea>>>> =
+        Rc::new(RefCell::new(Vec::new()));
 
     let factory = super::grid::overlay_factory({
         let state = state.clone();
@@ -682,7 +711,9 @@ pub fn build(
             list.retain(|w| w.upgrade().is_some());
             let da_ptr = da.as_ptr() as usize;
             let already = list.iter().any(|w| {
-                w.upgrade().map(|x| x.as_ptr() as usize == da_ptr).unwrap_or(false)
+                w.upgrade()
+                    .map(|x| x.as_ptr() as usize == da_ptr)
+                    .unwrap_or(false)
             });
             if !already {
                 let w = glib::WeakRef::new();
@@ -799,13 +830,29 @@ pub fn build(
             if first == u32::MAX {
                 ci.set(-1);
                 picker.clear();
-                refresh_preset_chips(&chips, &state, ci.clone(), &p, &ov, &sel_indices, &mark_dirty);
+                refresh_preset_chips(
+                    &chips,
+                    &state,
+                    ci.clone(),
+                    &p,
+                    &ov,
+                    &sel_indices,
+                    &mark_dirty,
+                );
                 update_status_label(&sl, &state, -1);
             } else {
                 let idx = first as i32;
                 ci.set(idx);
                 picker.bind(state.clone(), first as usize);
-                refresh_preset_chips(&chips, &state, ci.clone(), &p, &ov, &sel_indices, &mark_dirty);
+                refresh_preset_chips(
+                    &chips,
+                    &state,
+                    ci.clone(),
+                    &p,
+                    &ov,
+                    &sel_indices,
+                    &mark_dirty,
+                );
                 update_status_label(&sl, &state, idx);
             }
         }
@@ -827,7 +874,15 @@ pub fn build(
             if idx < 0 {
                 return;
             }
-            refresh_preset_chips(&chips, &state, ci.clone(), &p, &ov, &sel_indices, &mark_dirty);
+            refresh_preset_chips(
+                &chips,
+                &state,
+                ci.clone(),
+                &p,
+                &ov,
+                &sel_indices,
+                &mark_dirty,
+            );
             update_status_label(&sl, &state, idx);
             mark_dirty();
         }
@@ -875,7 +930,15 @@ pub fn build(
             drop(project);
 
             picker.set_crop(Some(Rect::new(0.0, 0.0, w as f64, h as f64)));
-            refresh_preset_chips(&chips, &state, ci.clone(), &p, &ov, &selected_indices, &mark_dirty);
+            refresh_preset_chips(
+                &chips,
+                &state,
+                ci.clone(),
+                &p,
+                &ov,
+                &selected_indices,
+                &mark_dirty,
+            );
             update_status_label(&sl, &state, idx);
             mark_dirty();
         }
@@ -899,7 +962,15 @@ pub fn build(
             if !initialised.get() {
                 initialised.set(true);
                 auto_detect_presets(&state, &store);
-                refresh_preset_chips(&chips, &state, ci.clone(), &p, &ov, &sel_indices, &mark_dirty);
+                refresh_preset_chips(
+                    &chips,
+                    &state,
+                    ci.clone(),
+                    &p,
+                    &ov,
+                    &sel_indices,
+                    &mark_dirty,
+                );
             }
             // Sync the picker to the current shared selection, so re-entering
             // this tab reflects whatever was selected on import/colors. Auto-
@@ -920,13 +991,29 @@ pub fn build(
                 Some(idx) => {
                     ci.set(idx as i32);
                     p.bind(state.clone(), idx as usize);
-                    refresh_preset_chips(&chips, &state, ci.clone(), &p, &ov, &sel_indices, &mark_dirty);
+                    refresh_preset_chips(
+                        &chips,
+                        &state,
+                        ci.clone(),
+                        &p,
+                        &ov,
+                        &sel_indices,
+                        &mark_dirty,
+                    );
                     update_status_label(&sl, &state, idx as i32);
                 }
                 None => {
                     ci.set(-1);
                     p.clear();
-                    refresh_preset_chips(&chips, &state, ci.clone(), &p, &ov, &sel_indices, &mark_dirty);
+                    refresh_preset_chips(
+                        &chips,
+                        &state,
+                        ci.clone(),
+                        &p,
+                        &ov,
+                        &sel_indices,
+                        &mark_dirty,
+                    );
                     update_status_label(&sl, &state, -1);
                 }
             }
@@ -984,10 +1071,7 @@ fn refresh_preset_chips(
         let chip = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(0)
-            .css_classes(vec![
-                "preset-chip",
-                &format!("preset-c{}", i % 8),
-            ])
+            .css_classes(vec!["preset-chip", &format!("preset-c{}", i % 8)])
             .build();
         if current_preset == Some(i) {
             chip.add_css_class("preset-active");
@@ -1014,8 +1098,12 @@ fn refresh_preset_chips(
             let pw = preset.w;
             let ph = preset.h;
             label_btn.connect_clicked(move |_| {
-                let Some(picker) = picker_weak.upgrade() else { return };
-                let Some(chips) = chips_weak.upgrade() else { return };
+                let Some(picker) = picker_weak.upgrade() else {
+                    return;
+                };
+                let Some(chips) = chips_weak.upgrade() else {
+                    return;
+                };
                 let targets = sel.borrow().clone();
                 if targets.is_empty() {
                     return;
@@ -1025,9 +1113,16 @@ fn refresh_preset_chips(
                 {
                     let mut project = state.borrow_mut();
                     for &idx in &targets {
-                        let Some(page) = project.pages.get_mut(idx) else { continue };
+                        let Some(page) = project.pages.get_mut(idx) else {
+                            continue;
+                        };
                         page.crop_preset = Some(pi);
-                        let mut cb = page.crop.unwrap_or(CropBox { x: 0, y: 0, w: 0, h: 0 });
+                        let mut cb = page.crop.unwrap_or(CropBox {
+                            x: 0,
+                            y: 0,
+                            w: 0,
+                            h: 0,
+                        });
                         cb.w = pw;
                         cb.h = ph;
                         if iw > 0.0 && cb.x as f64 + pw as f64 > iw {
@@ -1064,7 +1159,9 @@ fn refresh_preset_chips(
             lock_btn.set_tooltip_text(Some("Locked — drag won't change the preset size"));
         } else {
             lock_btn.set_icon_name("changes-allow-symbolic");
-            lock_btn.set_tooltip_text(Some("Unlocked — drag updates the preset for all pages in this group"));
+            lock_btn.set_tooltip_text(Some(
+                "Unlocked — drag updates the preset for all pages in this group",
+            ));
         }
 
         {
@@ -1083,7 +1180,9 @@ fn refresh_preset_chips(
                     btn.set_tooltip_text(Some("Locked — drag won't change the preset size"));
                 } else {
                     btn.set_icon_name("changes-allow-symbolic");
-                    btn.set_tooltip_text(Some("Unlocked — drag updates the preset for all pages in this group"));
+                    btn.set_tooltip_text(Some(
+                        "Unlocked — drag updates the preset for all pages in this group",
+                    ));
                 }
                 let mut project = state.borrow_mut();
                 if let Some(p) = project.crop_presets.get_mut(pi) {
@@ -1091,7 +1190,15 @@ fn refresh_preset_chips(
                 }
                 drop(project);
                 if let (Some(picker), Some(chips)) = (picker_weak.upgrade(), chips_weak.upgrade()) {
-                    refresh_preset_chips(&chips, &state, ci.clone(), &picker, &ov, &sel, &mark_dirty);
+                    refresh_preset_chips(
+                        &chips,
+                        &state,
+                        ci.clone(),
+                        &picker,
+                        &ov,
+                        &sel,
+                        &mark_dirty,
+                    );
                 }
                 mark_dirty();
             });
@@ -1119,8 +1226,12 @@ fn refresh_preset_chips(
                 let mark_dirty = mark_dirty.clone();
                 let pi = i;
                 close_btn.connect_clicked(move |_| {
-                    let Some(picker) = picker_weak.upgrade() else { return };
-                    let Some(chips) = chips_weak.upgrade() else { return };
+                    let Some(picker) = picker_weak.upgrade() else {
+                        return;
+                    };
+                    let Some(chips) = chips_weak.upgrade() else {
+                        return;
+                    };
                     delete_preset(&state, pi);
                     // If the deleted preset was the current page's, clear its crop.
                     {
@@ -1135,7 +1246,15 @@ fn refresh_preset_chips(
                             }
                         }
                     }
-                    refresh_preset_chips(&chips, &state, ci.clone(), &picker, &ov, &sel, &mark_dirty);
+                    refresh_preset_chips(
+                        &chips,
+                        &state,
+                        ci.clone(),
+                        &picker,
+                        &ov,
+                        &sel,
+                        &mark_dirty,
+                    );
                     mark_dirty();
                 });
             }
@@ -1191,7 +1310,9 @@ fn draw_crop_overlay(
         return;
     }
     let project = state.borrow();
-    let Some(page) = project.pages.get(page_index) else { return };
+    let Some(page) = project.pages.get(page_index) else {
+        return;
+    };
     let Some(crop) = page.crop else { return };
 
     let cw = crop.w as f64;
@@ -1201,18 +1322,31 @@ fn draw_crop_overlay(
     }
 
     // Read original image dimensions from the PageItem GObject.
-    let (iw, ih) = match page_store.item(page_index as u32).and_downcast::<PageItem>() {
+    let (iw, ih) = match page_store
+        .item(page_index as u32)
+        .and_downcast::<PageItem>()
+    {
         Some(item) => {
             let w = item.base_width() as f64;
             let h = item.base_height() as f64;
             if w > 0.0 && h > 0.0 {
                 let rot = page.rotation as u32 % 360;
-                if rot == 90 || rot == 270 { (h, w) } else { (w, h) }
+                if rot == 90 || rot == 270 {
+                    (h, w)
+                } else {
+                    (w, h)
+                }
             } else {
-                ((crop.x + crop.w).max(1) as f64, (crop.y + crop.h).max(1) as f64)
+                (
+                    (crop.x + crop.w).max(1) as f64,
+                    (crop.y + crop.h).max(1) as f64,
+                )
             }
         }
-        None => ((crop.x + crop.w).max(1) as f64, (crop.y + crop.h).max(1) as f64),
+        None => (
+            (crop.x + crop.w).max(1) as f64,
+            (crop.y + crop.h).max(1) as f64,
+        ),
     };
 
     // ContentFit::Contain scaling (same as the Picture widget).
@@ -1276,7 +1410,10 @@ fn update_status_label(lbl: &gtk::Label, state: &State, index: i32) {
         if let Some(pi) = page.crop_preset {
             if let Some(p) = project.crop_presets.get(pi) {
                 let locked = if p.locked { " \u{1f512}" } else { " \u{1f513}" };
-                t.push_str(&format!(" | Preset: {} ({}×{}{})", p.name, p.w, p.h, locked));
+                t.push_str(&format!(
+                    " | Preset: {} ({}×{}{})",
+                    p.name, p.w, p.h, locked
+                ));
             }
         }
         if let Some(c) = page.crop {
@@ -1315,7 +1452,11 @@ fn auto_detect_presets(state: &State, page_store: &gio::ListStore) {
             let h = item.base_height();
             if w > 0 && h > 0 {
                 let rot = project.pages.get(i).map(|p| p.rotation % 360).unwrap_or(0);
-                if rot == 90 || rot == 270 { Some((h, w)) } else { Some((w, h)) }
+                if rot == 90 || rot == 270 {
+                    Some((h, w))
+                } else {
+                    Some((w, h))
+                }
             } else {
                 None
             }
@@ -1403,8 +1544,8 @@ mod tests {
     fn corner_resize_respects_min() {
         let initial = Rect::new(0.0, 0.0, 100.0, 100.0);
         // Try to drag SE corner to NW corner — should clamp to MIN_CROP_PX.
-        let r = Handle::Corner(Corner::SE)
-            .apply(initial, (100.0, 100.0), (0.0, 0.0), (200.0, 200.0));
+        let r =
+            Handle::Corner(Corner::SE).apply(initial, (100.0, 100.0), (0.0, 0.0), (200.0, 200.0));
         // Either None (rejected as too small) or a rect with at least MIN_CROP_PX.
         if let Some(r) = r {
             assert!(r.w >= MIN_CROP_PX);

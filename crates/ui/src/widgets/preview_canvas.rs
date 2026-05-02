@@ -52,7 +52,9 @@ mod imp {
 
     impl WidgetImpl for PreviewCanvas {
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
-            let Some(tex) = self.texture.borrow().clone() else { return; };
+            let Some(tex) = self.texture.borrow().clone() else {
+                return;
+            };
             let z = self.zoom.get();
             let (px, py) = self.pan.get();
             let w = tex.width() as f32 * z as f32;

@@ -5,7 +5,8 @@ use gtk::prelude::*;
 use gtk::{gio, glib};
 
 use crate::app::State;
-use pagecutter_core::project::{load_pdf_meta, save_pdf_meta, ExportSettings, PdfMeta};
+use pagecutter_core::config::{load_pdf_meta, save_pdf_meta, PdfMeta};
+use pagecutter_core::project::ExportSettings;
 
 enum ExportMsg {
     Progress(usize, usize),
@@ -72,6 +73,7 @@ pub fn build(state: State) -> gtk::Widget {
             ExportSettings::Png => btn_png.set_active(true),
             ExportSettings::Tiff => btn_tiff.set_active(true),
             ExportSettings::Pdf { .. } => btn_pdf.set_active(true),
+            _ => {}
         }
     }
 

@@ -1,7 +1,9 @@
 use image::DynamicImage;
 use std::path::Path;
 
+/// EXIF orientation tag values mapped to descriptive variants.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Orientation {
     #[default]
     Normal,
@@ -30,6 +32,8 @@ impl From<u16> for Orientation {
 }
 
 impl Orientation {
+    /// Apply the orientation correction to an image.
+    #[must_use]
     pub fn apply(self, img: DynamicImage) -> DynamicImage {
         match self {
             Self::Normal => img,
@@ -44,26 +48,27 @@ impl Orientation {
     }
 }
 
+/// Read the EXIF orientation tag from `path`, falling back to [`Orientation::Normal`].
+///
+/// File-open errors are logged at warn level; a missing EXIF orientation field
+/// is logged at debug level (most images don't have one).
 pub fn read_orientation(path: &Path) -> Orientation {
-    let result: Option<Orientation> = std::fs::File::open(path)
-        .ok()
-        .and_then(|file| {
-            let mut reader = std::io::BufReader::new(file);
-            exif::Reader::new()
-                .read_from_container(&mut reader)
-                .ok()
-        })
-        .and_then(|exif| {
-            let field = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?;
-            field.value.get_uint(0)
-        })
-        .map(|tag| Orientation::from(tag as u16));
-
-    match result {
-        Some(o) => o,
-        None => {
-            tracing::debug!("no EXIF orientation found for {}", path.display());
-            Orientation::Normal
-        }
+    fn try_read(path: &Path) -> Option<Orientation> {
+        let file = std::fs::File::open(path)
+            .inspect_err(|e| tracing::warn!("cannot open {path}: {e}", path = path.display()))
+            .ok()?;
+        let mut reader = std::io::BufReader::new(file);
+        let exif = exif::Reader::new()
+            .read_from_container(&mut reader)
+            .inspect_err(|e| tracing::warn!("cannot parse EXIF for {path}: {e}", path = path.display()))
+            .ok()?;
+        let field = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?;
+        let tag = field.value.get_uint(0)?;
+        Some(Orientation::from(tag as u16))
     }
+
+    try_read(path).unwrap_or_else(|| {
+        tracing::debug!("no EXIF orientation found for {}", path.display());
+        Orientation::Normal
+    })
 }

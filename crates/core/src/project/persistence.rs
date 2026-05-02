@@ -1,150 +1,10 @@
 use crate::error::{Error, Result};
 use crate::io;
-use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-
-pub const CURRENT_SCHEMA: u32 = 1;
-
-fn schema_v1() -> u32 {
-    1
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CropBox {
-    pub x: u32,
-    pub y: u32,
-    pub w: u32,
-    pub h: u32,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct CropPreset {
-    pub name: String,
-    pub w: u32,
-    pub h: u32,
-    #[serde(default)]
-    pub locked: bool,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OutputSize {
-    pub w: u32,
-    pub h: u32,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Page {
-    pub path: PathBuf,
-    #[serde(default)]
-    pub rotation: u16,
-    #[serde(default)]
-    pub crop: Option<CropBox>,
-    #[serde(default)]
-    pub crop_preset: Option<usize>,
-    #[serde(default)]
-    pub output: Option<OutputSize>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Project {
-    #[serde(default = "schema_v1")]
-    pub version: u32,
-    pub pages: Vec<Page>,
-    #[serde(default)]
-    pub crop_presets: Vec<CropPreset>,
-    pub export: ExportSettings,
-    pub output_dir: PathBuf,
-    pub prefix: String,
-    #[serde(default)]
-    pub brightness: f32,
-    #[serde(default)]
-    pub contrast: f32,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "format", rename_all = "lowercase")]
-pub enum ExportSettings {
-    Png,
-    Jpeg { quality: u8 },
-    Tiff,
-    Pdf { quality: u8 },
-}
-
-impl Default for Project {
-    fn default() -> Self {
-        Self {
-            version: CURRENT_SCHEMA,
-            pages: Vec::new(),
-            crop_presets: Vec::new(),
-            export: ExportSettings::Png,
-            output_dir: PathBuf::new(),
-            prefix: "page".into(),
-            brightness: 0.0,
-            contrast: 0.0,
-        }
-    }
-}
-
-// --- PDF metadata -----------------------------------------------------------
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PdfMeta {
-    #[serde(default)]
-    pub title: String,
-    #[serde(default)]
-    pub author: String,
-    #[serde(default = "default_creator")]
-    pub creator: String,
-    #[serde(default)]
-    pub subject: String,
-    #[serde(default)]
-    pub keywords: String,
-    #[serde(default = "default_dpi")]
-    pub dpi: f64,
-}
-
-fn default_creator() -> String {
-    "pagecutter".into()
-}
-
-fn default_dpi() -> f64 {
-    300.0
-}
-
-impl Default for PdfMeta {
-    fn default() -> Self {
-        Self {
-            title: String::new(),
-            author: String::new(),
-            creator: default_creator(),
-            subject: String::new(),
-            keywords: String::new(),
-            dpi: default_dpi(),
-        }
-    }
-}
-
-fn pdf_meta_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("pagecutter").join("pdf_meta.json"))
-}
-
-pub fn load_pdf_meta() -> PdfMeta {
-    pdf_meta_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
-pub fn save_pdf_meta(meta: &PdfMeta) -> Result<()> {
-    let path = pdf_meta_path().ok_or(Error::NoConfigDir)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let json = serde_json::to_string_pretty(meta)?;
-    io::write_atomic(&path, json.as_bytes())
-}
-
-// --- Project save / load ----------------------------------------------------
+use crate::project::types::{
+    CropBox, CropPreset, ExportSettings, OutputSize, Page, Project, CURRENT_SCHEMA,
+};
+use serde::Serialize;
+use std::path::Path;
 
 #[derive(Serialize)]
 struct ProjectView<'a> {
@@ -173,6 +33,18 @@ struct PageView<'a> {
     output: Option<OutputSize>,
 }
 
+impl<'a> From<&'a Page> for PageView<'a> {
+    fn from(page: &'a Page) -> Self {
+        Self {
+            path: &page.path,
+            rotation: page.rotation,
+            crop: page.crop,
+            crop_preset: page.crop_preset,
+            output: page.output,
+        }
+    }
+}
+
 pub fn save_project(project: &Project, file_path: &Path) -> Result<()> {
     let base = file_path.parent().unwrap_or(Path::new("."));
     let pages: Vec<PageView> = project
@@ -180,10 +52,7 @@ pub fn save_project(project: &Project, file_path: &Path) -> Result<()> {
         .iter()
         .map(|p| PageView {
             path: p.path.strip_prefix(base).unwrap_or(&p.path),
-            rotation: p.rotation,
-            crop: p.crop,
-            crop_preset: p.crop_preset,
-            output: p.output,
+            ..PageView::from(p)
         })
         .collect();
     let view = ProjectView {
@@ -200,6 +69,19 @@ pub fn save_project(project: &Project, file_path: &Path) -> Result<()> {
     io::write_atomic(file_path, json.as_bytes())
 }
 
+/// Upgrade a loaded project from an older schema version to the current one.
+///
+/// Version migrations are applied sequentially.  Right now this is a no-op
+/// (current schema == 1), but it provides the hook for future version bumps.
+pub fn migrate_project(project: &mut Project) {
+    while project.version < CURRENT_SCHEMA {
+        match project.version {
+            0 => project.version = 1,
+            _ => break,
+        }
+    }
+}
+
 pub fn load_project(file_path: &Path) -> Result<Project> {
     let base = file_path.parent().unwrap_or(Path::new("."));
     let json = std::fs::read_to_string(file_path)?;
@@ -210,6 +92,7 @@ pub fn load_project(file_path: &Path) -> Result<Project> {
             supported: CURRENT_SCHEMA,
         });
     }
+    migrate_project(&mut project);
     for page in &mut project.pages {
         if page.path.is_relative() {
             page.path = base.join(&page.path);
@@ -221,6 +104,7 @@ pub fn load_project(file_path: &Path) -> Result<Project> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project::types::{CropPreset, ExportSettings, OutputSize, Page};
 
     #[test]
     fn project_round_trip_save_load() {
@@ -264,9 +148,20 @@ mod tests {
         assert_eq!(loaded.pages.len(), 1);
         assert_eq!(loaded.pages[0].path, img_path);
         assert_eq!(loaded.pages[0].rotation, 90);
-        assert_eq!(loaded.pages[0].crop, Some(CropBox { x: 10, y: 20, w: 100, h: 200 }));
+        assert_eq!(
+            loaded.pages[0].crop,
+            Some(CropBox {
+                x: 10,
+                y: 20,
+                w: 100,
+                h: 200
+            })
+        );
         assert_eq!(loaded.crop_presets[0].name, "test");
-        assert!(matches!(loaded.export, ExportSettings::Jpeg { quality: 85 }));
+        assert!(matches!(
+            loaded.export,
+            ExportSettings::Jpeg { quality: 85 }
+        ));
         assert_eq!(loaded.brightness, 5.0);
         assert_eq!(loaded.contrast, 10.0);
     }
@@ -285,7 +180,13 @@ mod tests {
         let proj_path = tmp.path().join("future.pcut");
         std::fs::write(&proj_path, serde_json::to_string(&json).unwrap()).unwrap();
         let err = load_project(&proj_path).unwrap_err();
-        assert!(matches!(err, Error::UnsupportedProjectVersion { found: 99, supported: _ }));
+        assert!(matches!(
+            err,
+            Error::UnsupportedProjectVersion {
+                found: 99,
+                supported: _
+            }
+        ));
     }
 
     #[test]

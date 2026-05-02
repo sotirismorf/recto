@@ -1,12 +1,17 @@
+mod transforms;
+
+use crate::config::PdfMeta;
 use crate::error::{Error, Result};
 use crate::exif;
 use crate::io as pio;
-use crate::project::{ExportSettings, Page, PdfMeta, Project};
-use image::{codecs::jpeg::JpegEncoder, imageops::FilterType, DynamicImage};
+use crate::pipeline::transforms::{apply_colors, apply_crop, apply_resize, apply_rotation};
+use crate::project::types::{ExportSettings, Page, Project};
+use image::{codecs::jpeg::JpegEncoder, DynamicImage};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// Run the full six-step transform pipeline on a page.
 fn transform_page(project: &Project, page: &Page) -> Result<DynamicImage> {
     let img = pio::load(&page.path)?;
     let img = exif::read_orientation(&page.path).apply(img);
@@ -17,6 +22,17 @@ fn transform_page(project: &Project, page: &Page) -> Result<DynamicImage> {
     Ok(img)
 }
 
+/// Process every page in parallel, saving individual image files according to
+/// the project's [`ExportSettings`].
+///
+/// The `on_progress` callback receives `(done, total)` after each page
+/// completes.  Returns one [`Result`] per page in order.
+///
+/// # Errors
+///
+/// Returns `Err(Error::PdfNotSupportedInBatch)` when the export format is PDF;
+/// use [`export_to_pdf`] instead.
+#[must_use]
 pub fn run_batch<F>(project: &Project, on_progress: F) -> Vec<Result<PathBuf>>
 where
     F: Fn(usize, usize) + Sync + Send,
@@ -41,6 +57,10 @@ where
         .collect()
 }
 
+/// Export all pages as a single PDF with JPEG-encoded images.
+///
+/// The `on_progress` callback receives `(done, total)` after each page.
+/// Metadata from [`PdfMeta`] is written into the PDF document info dictionary.
 pub fn export_to_pdf<F>(
     project: &Project,
     out_path: &Path,
@@ -137,6 +157,7 @@ where
     pio::write_atomic(out_path, &pdf_bytes)
 }
 
+/// Export a single page to an image file, returning the output path.
 fn process_one(project: &Project, page: &Page, index: usize) -> Result<PathBuf> {
     let img = transform_page(project, page)?;
 
@@ -159,59 +180,17 @@ fn process_one(project: &Project, page: &Page, index: usize) -> Result<PathBuf> 
     Ok(out_path)
 }
 
-fn apply_rotation(img: DynamicImage, rotation: u16) -> DynamicImage {
-    match rotation % 360 {
-        90 => img.rotate90(),
-        180 => img.rotate180(),
-        270 => img.rotate270(),
-        _ => img,
-    }
-}
-
-fn apply_crop(img: DynamicImage, page: &Page) -> DynamicImage {
-    let Some(c) = page.crop else { return img };
-    let (iw, ih) = (img.width(), img.height());
-    let x = c.x.min(iw.saturating_sub(1));
-    let y = c.y.min(ih.saturating_sub(1));
-    let w = c.w.min(iw - x);
-    let h = c.h.min(ih - y);
-    img.crop_imm(x, y, w, h)
-}
-
-fn apply_colors(img: DynamicImage, brightness: f32, contrast: f32) -> DynamicImage {
-    if brightness == 0.0 && contrast == 0.0 {
-        return img;
-    }
-    let c = (contrast + 1.0).max(0.0) as f64;
-    let b = (brightness as f64 * 128.0).round() as i32;
-    let mut rgb = img.into_rgb8();
-    rgb.as_mut().par_iter_mut().for_each(|ch| {
-        let v = ((*ch as f64 - 128.0) * c + 128.0).round() as i32 + b;
-        *ch = v.clamp(0, 255) as u8;
-    });
-    DynamicImage::ImageRgb8(rgb)
-}
-
-fn apply_resize(img: DynamicImage, page: &Page) -> DynamicImage {
-    let Some(o) = page.output else { return img };
-    if o.w == img.width() && o.h == img.height() {
-        return img;
-    }
-    img.resize_exact(o.w, o.h, FilterType::Lanczos3)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::CropBox;
+    use crate::project::types::CropBox;
 
     #[test]
     fn transform_page_smoke() {
         let tmp = tempfile::tempdir().unwrap();
         let img_path = tmp.path().join("test.png");
-        let test_img = image::ImageBuffer::from_fn(64, 48, |x, y| {
-            image::Rgb([x as u8, y as u8, 128u8])
-        });
+        let test_img =
+            image::ImageBuffer::from_fn(64, 48, |x, y| image::Rgb([x as u8, y as u8, 128u8]));
         test_img.save(&img_path).unwrap();
 
         let project = Project::default();
@@ -232,9 +211,8 @@ mod tests {
     fn transform_page_with_crop_and_resize() {
         let tmp = tempfile::tempdir().unwrap();
         let img_path = tmp.path().join("test.png");
-        let test_img = image::ImageBuffer::from_fn(128, 128, |x, y| {
-            image::Rgb([x as u8, y as u8, 255u8])
-        });
+        let test_img =
+            image::ImageBuffer::from_fn(128, 128, |x, y| image::Rgb([x as u8, y as u8, 255u8]));
         test_img.save(&img_path).unwrap();
 
         let project = Project {
@@ -252,7 +230,7 @@ mod tests {
                 h: 64,
             }),
             crop_preset: None,
-            output: Some(crate::project::OutputSize { w: 32, h: 32 }),
+            output: Some(crate::project::types::OutputSize { w: 32, h: 32 }),
         };
 
         let result = transform_page(&project, &page).unwrap();

@@ -29,4 +29,6 @@ pub enum Command {
     SetPrefix(String),
     AddCropPreset(CropPreset),
     RemoveCropPreset(usize),
+    SetCropPresetLocked { index: usize, locked: bool },
+    SetCropPresetSize { index: usize, w: u32, h: u32 },
 }

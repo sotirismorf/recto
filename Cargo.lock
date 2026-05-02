@@ -1608,6 +1608,7 @@ dependencies = [
  "clap",
  "glib",
  "gtk4",
+ "image",
  "libadwaita",
  "rayon",
  "recto-core",

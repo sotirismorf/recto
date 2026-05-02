@@ -1,10 +1,16 @@
 use gtk::prelude::*;
-use gtk::glib;
+use gtk::{gdk_pixbuf, glib};
 use std::cell::Cell;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use crate::app::State;
 use crate::types::PageId;
+
+pub struct ThumbReq {
+    pub id: PageId,
+    pub path: PathBuf,
+}
 
 pub struct ThumbData {
     pub bytes: glib::Bytes,
@@ -19,6 +25,62 @@ pub struct ThumbData {
 pub enum LoadMsg {
     Progress(PageId, ThumbData),
     Finished,
+}
+
+/// Encapsulates the rayon thumbnail loader behind a simple `enqueue_batch` API.
+/// Create with [`ThumbnailService::new`]; keep the service alive to keep the
+/// worker thread alive.  Drop it to shut down the worker and close the result
+/// channel.
+pub struct ThumbnailService {
+    job_queue: crate::worker::JobQueue,
+    msg_tx: async_channel::Sender<LoadMsg>,
+}
+
+impl ThumbnailService {
+    pub fn new() -> (Self, async_channel::Receiver<LoadMsg>) {
+        let (msg_tx, msg_rx) = async_channel::unbounded();
+        (
+            Self {
+                job_queue: crate::worker::JobQueue::new(),
+                msg_tx,
+            },
+            msg_rx,
+        )
+    }
+
+    pub fn enqueue_batch(&self, items: Vec<ThumbReq>) {
+        if items.is_empty() {
+            return;
+        }
+        let tx = self.msg_tx.clone();
+        self.job_queue.spawn(move || {
+            use rayon::prelude::*;
+            items.into_par_iter().for_each(|req| {
+                let file_dims = gdk_pixbuf::Pixbuf::file_info(&req.path)
+                    .map(|(_, w, h)| (w as u32, h as u32))
+                    .unwrap_or((0, 0));
+                if let Ok(pb) =
+                    gdk_pixbuf::Pixbuf::from_file_at_scale(&req.path, 256, 256, true)
+                {
+                    let pb = pb.apply_embedded_orientation().unwrap_or(pb);
+                    let (orig_width, orig_height) =
+                        exif_corrected_dims(file_dims, pb.width(), pb.height());
+                    let bytes = pb.read_pixel_bytes();
+                    let data = ThumbData {
+                        bytes,
+                        width: pb.width(),
+                        height: pb.height(),
+                        rowstride: pb.rowstride(),
+                        has_alpha: pb.has_alpha(),
+                        orig_width,
+                        orig_height,
+                    };
+                    let _ = tx.send_blocking(LoadMsg::Progress(req.id, data));
+                }
+                let _ = tx.send_blocking(LoadMsg::Finished);
+            });
+        });
+    }
 }
 
 pub(crate) fn exif_corrected_dims(

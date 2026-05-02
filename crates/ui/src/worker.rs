@@ -1,17 +1,44 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 
-/// A single background thread that executes fire-and-forget closures
-/// sequentially.  Tasks are free to use `rayon::par_iter` internally for
-/// parallelism — the [`Worker`] just provides the off-main-thread context.
+/// A handle that can cancel a job running on a [`JobQueue`].
 ///
-/// Every `std::thread::spawn` in the codebase should go through this type
-/// instead of spawning ad-hoc threads.
-pub struct Worker {
+/// Call [`Self::cancel`] from the main thread; the worker thread
+/// checks the flag between work units and exits early when set.
+#[derive(Clone)]
+#[allow(dead_code)]
+pub struct JobToken {
+    cancelled: Arc<AtomicBool>,
+}
+
+#[allow(dead_code)]
+impl JobToken {
+    /// Signal the worker that this job should be abandoned.
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+
+    /// Check whether cancellation was requested.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
+    }
+}
+
+/// A single background thread for fire-and-forget batch work.
+///
+/// Jobs run sequentially. Tasks are free to use `rayon::par_iter`
+/// internally for data parallelism — the [`JobQueue`] just provides
+/// the off-main-thread context.
+///
+/// Every `std::thread::spawn` call for batch work should go through
+/// this type (preview work uses [`PreviewService`](crate::latest::PreviewService)).
+pub struct JobQueue {
     task_tx: Option<async_channel::Sender<Box<dyn FnOnce() + Send + 'static>>>,
     handle: Option<thread::JoinHandle<()>>,
 }
 
-impl Worker {
+impl JobQueue {
     pub fn new() -> Self {
         let (tx, rx) = async_channel::unbounded::<Box<dyn FnOnce() + Send + 'static>>();
         let handle = thread::spawn(move || {
@@ -34,12 +61,19 @@ impl Worker {
             let _ = tx.send_blocking(Box::new(f));
         }
     }
+
+    /// Create a cancellation token that can be used to signal the
+    /// in-flight job to stop early.
+    #[allow(dead_code)]
+    pub fn job_token(&self) -> JobToken {
+        JobToken {
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
 }
 
-impl Drop for Worker {
+impl Drop for JobQueue {
     fn drop(&mut self) {
-        // Dropping the sender closes the channel, causing recv_blocking to
-        // return Err and the worker thread to exit.
         drop(self.task_tx.take());
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();

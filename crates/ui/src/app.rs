@@ -1,7 +1,7 @@
 use gtk::subclass::prelude::ObjectSubclassIsExt;
 use gtk::{gio, glib};
 use recto_core::command::{AppEvent, AppState};
-use recto_core::project::Project;
+use recto_core::Project;
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -9,8 +9,6 @@ use std::rc::Rc;
 use crate::widgets::page_item::PageItem;
 
 pub type State = Rc<AppState>;
-
-pub type MarkDirty = Rc<dyn Fn()>;
 
 pub fn new_state() -> (State, async_channel::Receiver<AppEvent>) {
     let (state, rx) = AppState::new(Project::default());

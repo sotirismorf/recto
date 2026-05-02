@@ -21,3 +21,4 @@ adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
 glib = "0.22"
 clap = { version = "4", features = ["derive"] }
 rayon.workspace = true
+image.workspace = true

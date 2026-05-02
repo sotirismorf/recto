@@ -1,14 +1,13 @@
-use std::cell::Cell;
 use std::path::PathBuf;
 
 use adw::prelude::*;
 use gtk::gio;
 
 use crate::app::State;
-use crate::widgets::preview_canvas::PreviewCanvas;
-use recto_core::Command;
-
+use crate::latest::RequestDedup;
 use crate::widgets::page_item::PageItem;
+use crate::widgets::preview_canvas::PreviewCanvas;
+use recto_core::{Command, Rotation};
 
 /// Sync existing page-store items with the project state — only updates
 /// metadata (rotation, …) without reloading thumbnails from disk.
@@ -43,37 +42,44 @@ pub(crate) fn sync_page_metadata(store: &gio::ListStore, state: &State) {
 pub(crate) fn update_arrange_preview(
     sel: &gtk::MultiSelection,
     preview: &PreviewCanvas,
-    preview_req_id: &Cell<u64>,
-    tx_prev: &async_channel::Sender<(u64, PathBuf, u32)>,
+    preview_req: &RequestDedup<(PathBuf, u32)>,
 ) {
     let positions = selected_positions(sel);
     if let Some(&first) = positions.first() {
         if let Some(page) = sel.item(first).and_downcast::<PageItem>() {
-            let id = preview_req_id.get() + 1;
-            preview_req_id.set(id);
-            let _ = tx_prev.send_blocking((id, page.path(), page.rotation()));
+            preview_req.send((page.path(), page.rotation()));
             return;
         }
     }
-    preview_req_id.set(preview_req_id.get() + 1);
+    preview_req.send_dummy();
     preview.set_texture(None);
 }
 
-pub(crate) fn rotate_selected(
-    sel: &gtk::MultiSelection,
-    store: &gio::ListStore,
-    state: &State,
-    delta: i32,
-) {
+pub(crate) fn rotate_selected(sel: &gtk::MultiSelection, state: &State, delta: i32) {
+    let project = state.project();
     for pos in selected_positions(sel) {
-        let Some(page) = store.item(pos).and_downcast::<PageItem>() else {
+        let Some(page) = project.pages.get(pos as usize) else {
             continue;
         };
-        page.apply_rotation_delta(delta);
+        let new_deg = (page.rotation.as_degrees() as i32 + delta).rem_euclid(360) as u16;
         state.dispatch(Command::SetRotation {
             index: pos as usize,
-            rotation: recto_core::Rotation::new(page.rotation() as u16),
+            rotation: Rotation::new(new_deg),
         });
+    }
+}
+
+pub(crate) fn project_page_into_store(store: &gio::ListStore, state: &State, idx: usize) {
+    let project = state.project();
+    let Some(page) = project.pages.get(idx) else {
+        return;
+    };
+    let Some(item) = store.item(idx as u32).and_downcast::<PageItem>() else {
+        return;
+    };
+    let expected = page.rotation.as_degrees() as u32;
+    if item.rotation() != expected {
+        item.set_rotation_absolute(expected);
     }
 }
 

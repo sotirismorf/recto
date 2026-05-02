@@ -1,5 +1,8 @@
+mod arrange;
+mod color;
 mod css;
-mod helpers;
+mod crop;
+pub mod helpers;
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -8,19 +11,22 @@ use std::rc::Rc;
 use adw::prelude::*;
 use gtk::{gdk, gdk_pixbuf, gio, glib};
 
-use crate::app::{MarkDirty, State};
+use crate::app::State;
+use crate::latest::PreviewService;
+use crate::widgets::color_preview::ColorReq;
 use crate::widgets::preview_canvas::PreviewCanvas;
 use crate::widgets::zoom_pan::{ZoomPanConfig, ZoomPanController};
 use crate::widgets::crop_picker::CropPicker;
-use crate::widgets::thumbnail_loader::ThumbData;
+use crate::widgets::thumbnail_loader::{
+    decrement_pending, update_count, LoadMsg, ThumbData, ThumbReq, ThumbnailService,
+};
 use crate::widgets::page_item::PageItem;
-use crate::worker::Worker;
-use recto_core::{AppEvent, Command, Project};
+use crate::widgets::preset_chips::PresetCallbacks;
+use recto_core::{AppEvent, Command};
 
 use css::{load_preset_css, load_sidebar_css};
 use helpers::{
-    make_mode_button, make_section, rotate_selected, selected_positions,
-    sync_page_metadata, update_arrange_preview,
+    make_mode_button, project_page_into_store, sync_page_metadata, update_arrange_preview,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -29,6 +35,42 @@ pub enum Mode {
     Arrange,
     Crop,
     Color,
+}
+
+fn projector_on_pages_added(
+    store: &gio::ListStore,
+    state: &State,
+    indices: &[usize],
+) -> Vec<ThumbReq> {
+    let paths: Vec<(PathBuf, u32)> = {
+        let project = state.project();
+        indices
+            .iter()
+            .filter_map(|&i| {
+                let page = project.pages.get(i)?;
+                Some((page.path.clone(), page.rotation.as_degrees() as u32))
+            })
+            .collect()
+    };
+    paths
+        .into_iter()
+        .map(|(path, rotation)| {
+            let item = PageItem::new_placeholder(path.clone());
+            item.set_rotation(rotation);
+            store.append(&item);
+            ThumbReq { id: item.stable_id(), path }
+        })
+        .collect()
+}
+
+fn projector_on_pages_removed(store: &gio::ListStore, indices: &[usize]) {
+    let mut sorted = indices.to_vec();
+    sorted.sort_unstable_by(|a, b| b.cmp(a));
+    for idx in sorted {
+        if (idx as u32) < store.n_items() {
+            store.remove(idx as u32);
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -40,67 +82,76 @@ pub fn build(
     spinner: gtk::Spinner,
     count: gtk::Label,
     load_images: Rc<dyn Fn(Vec<PathBuf>)>,
-    _load_project: Rc<dyn Fn(Project)>,
-    mark_dirty: MarkDirty,
-    _worker: Rc<Worker>,
     event_rx: async_channel::Receiver<AppEvent>,
 ) -> gtk::Widget {
     let current_mode: Rc<Cell<Mode>> = Rc::new(Cell::new(Mode::Arrange));
-
-    let current_index: Rc<Cell<i32>> = Rc::new(Cell::new(-1));
+    let current_index: Rc<Cell<Option<usize>>> = Rc::new(Cell::new(None));
     let crop_initialised: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     let selected_indices: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(Vec::new()));
     let overlays: Rc<RefCell<Vec<glib::WeakRef<gtk::DrawingArea>>>> =
         Rc::new(RefCell::new(Vec::new()));
 
-    let (tx_prev, rx_prev) = async_channel::unbounded::<(u64, PathBuf, u32)>();
-    let (tx_prev_res, rx_prev_res) = async_channel::unbounded::<(u64, ThumbData)>();
-    let preview_req_id: Rc<Cell<u64>> = Rc::new(Cell::new(0));
+    let preset_callbacks: Rc<PresetCallbacks> = {
+        let s = state.clone();
+        Rc::new(PresetCallbacks {
+            get_project: Rc::new({
+                let s = s.clone();
+                move || s.project().clone()
+            }),
+            on_set_crop_preset: Rc::new({
+                let s = s.clone();
+                move |idx, preset| s.dispatch(Command::SetCropPreset { index: idx, preset })
+            }),
+            on_set_crop: Rc::new({
+                let s = s.clone();
+                move |idx, crop| s.dispatch(Command::SetCrop { index: idx, crop })
+            }),
+            on_set_crop_preset_locked: Rc::new({
+                let s = s.clone();
+                move |idx, locked| s.dispatch(Command::SetCropPresetLocked { index: idx, locked })
+            }),
+            on_remove_crop_preset: Rc::new({
+                let s = s.clone();
+                move |pi| s.dispatch(Command::RemoveCropPreset(pi))
+            }),
+            on_add_crop_preset: Rc::new({
+                let s = s.clone();
+                move |preset| s.dispatch(Command::AddCropPreset(preset))
+            }),
+        })
+    };
 
-    std::thread::spawn(move || {
-        while let Ok((id, path, rotation)) = rx_prev.recv_blocking() {
-            let mut latest = (id, path, rotation);
-            while let Ok(next) = rx_prev.try_recv() {
-                latest = next;
-            }
-            let (id, path, rotation) = latest;
-            if let Ok(pb) = gdk_pixbuf::Pixbuf::from_file(&path) {
-                let pb = pb.apply_embedded_orientation().unwrap_or(pb);
-                let pb = crate::widgets::page_item::rotate(&pb, rotation);
-                let bytes = pb.read_pixel_bytes();
-                let data = ThumbData {
-                    bytes,
-                    width: pb.width(),
-                    height: pb.height(),
-                    rowstride: pb.rowstride(),
-                    has_alpha: pb.has_alpha(),
-                    orig_width: pb.width() as u32,
-                    orig_height: pb.height() as u32,
-                };
-                let _ = tx_prev_res.send_blocking((id, data));
-            }
-        }
-    });
+    // ---- Thumbnail service --------------------------------------------------
+    let (thumb_svc, thumb_msg_rx) = ThumbnailService::new();
+    let pending_tasks: Rc<Cell<usize>> = Rc::new(Cell::new(0));
 
-    let color_req_id: Rc<Cell<u64>> = Rc::new(Cell::new(0));
-    let (tx_color, rx_color) = async_channel::unbounded::<crate::widgets::color_preview::ColorReq>();
-    let (tx_color_res, rx_color_res) = async_channel::unbounded::<crate::widgets::color_preview::ColorResult>();
+    // ---- Preview services ---------------------------------------------------
+    let (arrange_preview_svc, preview_req, rx_prev_res) =
+        PreviewService::<(PathBuf, u32), ThumbData>::new(|_id, (path, rotation)| {
+            let pb = gdk_pixbuf::Pixbuf::from_file(&path).ok()?;
+            let pb = pb.apply_embedded_orientation().unwrap_or(pb);
+            let pb = crate::widgets::page_item::rotate(&pb, rotation);
+            let bytes = pb.read_pixel_bytes();
+            Some(ThumbData {
+                bytes,
+                width: pb.width(),
+                height: pb.height(),
+                rowstride: pb.rowstride(),
+                has_alpha: pb.has_alpha(),
+                orig_width: pb.width() as u32,
+                orig_height: pb.height() as u32,
+            })
+        });
 
-    std::thread::spawn(move || {
-        while let Ok(mut req) = rx_color.recv_blocking() {
-            while let Ok(next) = rx_color.try_recv() {
-                req = next;
-            }
-            if let Some(result) = crate::widgets::color_preview::render_preview(&req) {
-                let _ = tx_color_res.send_blocking(result);
-            }
-        }
-    });
+    let (color_preview_svc, color_req, rx_color_res) =
+        PreviewService::<ColorReq, crate::widgets::color_preview::ColorResult>::new(
+            |_id, req| crate::widgets::color_preview::render_preview(&req),
+        );
 
     load_preset_css();
     load_sidebar_css();
 
-    // ---- Sidebar ----
+    // ---- Sidebar — mode buttons ------------------------------------------
     let btn_arrange = make_mode_button("view-grid-symbolic", "Arrange", None);
     btn_arrange.set_active(true);
     let btn_crop = make_mode_button("edit-cut-symbolic", "Crop", Some(&btn_arrange));
@@ -118,197 +169,19 @@ pub fn build(
     mode_btn_box.append(&btn_crop);
     mode_btn_box.append(&btn_color);
 
-    // Arrange controls
-    let add_btn = gtk::Button::builder()
-        .child(
-            &adw::ButtonContent::builder()
-                .icon_name("list-add-symbolic")
-                .label("Add Images")
-                .build(),
-        )
-        .build();
-    add_btn.add_css_class("suggested-action");
-    add_btn.add_css_class("pill");
+    // ---- Sidebar — per-mode controls --------------------------------------
+    let arrange_sidebar = arrange::build_arrange_sidebar(&spinner, &count);
+    let crop_sidebar = crop::build_crop_sidebar();
+    let color_sidebar = color::build_color_sidebar(&state);
 
-    let rotate_ccw = gtk::Button::builder()
-        .icon_name("object-rotate-left-symbolic")
-        .tooltip_text("Rotate 90° counter-clockwise")
-        .sensitive(false)
-        .build();
-    let rotate_180 = gtk::Button::builder()
-        .icon_name("object-flip-vertical-symbolic")
-        .tooltip_text("Rotate 180°")
-        .sensitive(false)
-        .build();
-    let rotate_cw = gtk::Button::builder()
-        .icon_name("object-rotate-right-symbolic")
-        .tooltip_text("Rotate 90° clockwise")
-        .sensitive(false)
-        .build();
-
-    let rotate_box = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(0)
-        .homogeneous(true)
-        .build();
-    rotate_box.add_css_class("linked");
-    rotate_box.append(&rotate_ccw);
-    rotate_box.append(&rotate_180);
-    rotate_box.append(&rotate_cw);
-
-    let rotate_section = make_section("Rotate", &rotate_box);
-
-    let delete_btn = gtk::Button::builder()
-        .child(
-            &adw::ButtonContent::builder()
-                .icon_name("user-trash-symbolic")
-                .label("Delete")
-                .build(),
-        )
-        .tooltip_text("Remove selected pages")
-        .sensitive(false)
-        .build();
-    delete_btn.add_css_class("destructive-action");
-    delete_btn.add_css_class("flat");
-
-    let arrange_spacer = gtk::Box::builder().vexpand(true).build();
-
-    count.set_visible(false);
-    let status_box = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(6)
-        .halign(gtk::Align::Center)
-        .build();
-    status_box.append(&spinner);
-    status_box.append(&count);
-
-    let arrange_controls = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(12)
-        .margin_top(8)
-        .margin_bottom(8)
-        .margin_start(10)
-        .margin_end(10)
-        .build();
-    arrange_controls.append(&add_btn);
-    arrange_controls.append(&rotate_section);
-    arrange_controls.append(&delete_btn);
-    arrange_controls.append(&arrange_spacer);
-    arrange_controls.append(&status_box);
-
-    // Crop controls
-    let preset_chips = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(4)
-        .build();
-
-    let preset_scroll = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .vscrollbar_policy(gtk::PolicyType::Automatic)
-        .child(&preset_chips)
-        .vexpand(true)
-        .build();
-
-    let btn_new = gtk::Button::builder()
-        .child(
-            &adw::ButtonContent::builder()
-                .icon_name("list-add-symbolic")
-                .label("New Preset")
-                .build(),
-        )
-        .tooltip_text("New preset from current crop")
-        .build();
-    btn_new.add_css_class("flat");
-
-    let presets_section = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(4)
-        .vexpand(true)
-        .build();
-    let presets_header = gtk::Label::builder()
-        .label("Presets")
-        .xalign(0.0)
-        .css_classes(["heading", "caption"])
-        .build();
-    presets_section.append(&presets_header);
-    presets_section.append(&preset_scroll);
-
-    let status_lbl = gtk::Label::builder()
-        .xalign(0.0)
-        .css_classes(["dim-label", "caption"])
-        .wrap(true)
-        .build();
-
-    let crop_controls = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(8)
-        .margin_top(8)
-        .margin_bottom(8)
-        .margin_start(10)
-        .margin_end(10)
-        .build();
-    crop_controls.append(&presets_section);
-    crop_controls.append(&btn_new);
-
-    // Color controls
-    let init_brightness = state.project().brightness.as_f32() as f64;
-    let init_contrast = state.project().contrast.as_f32() as f64;
-
-    let brightness_scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, -1.0, 1.0, 0.01);
-    brightness_scale.set_value(init_brightness);
-    brightness_scale.set_draw_value(true);
-    brightness_scale.set_value_pos(gtk::PositionType::Right);
-    brightness_scale.set_digits(2);
-    brightness_scale.set_hexpand(true);
-    brightness_scale.add_mark(0.0, gtk::PositionType::Bottom, None);
-
-    let contrast_scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, -1.0, 1.0, 0.01);
-    contrast_scale.set_value(init_contrast);
-    contrast_scale.set_draw_value(true);
-    contrast_scale.set_value_pos(gtk::PositionType::Right);
-    contrast_scale.set_digits(2);
-    contrast_scale.set_hexpand(true);
-    contrast_scale.add_mark(0.0, gtk::PositionType::Bottom, None);
-
-    let reset_btn = gtk::Button::builder()
-        .child(
-            &adw::ButtonContent::builder()
-                .icon_name("edit-undo-symbolic")
-                .label("Reset")
-                .build(),
-        )
-        .tooltip_text("Reset brightness and contrast")
-        .build();
-    reset_btn.add_css_class("flat");
-
-    let brightness_section = make_section("Brightness", &brightness_scale);
-    let contrast_section = make_section("Contrast", &contrast_scale);
-
-    let color_spacer = gtk::Box::builder().vexpand(true).build();
-
-    let color_controls = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(12)
-        .margin_top(8)
-        .margin_bottom(8)
-        .margin_start(10)
-        .margin_end(10)
-        .build();
-    color_controls.append(&brightness_section);
-    color_controls.append(&contrast_section);
-    color_controls.append(&color_spacer);
-    color_controls.append(&reset_btn);
-
-    // Mode controls stack
     let mode_controls_stack = gtk::Stack::builder()
         .transition_type(gtk::StackTransitionType::None)
         .vexpand(true)
         .build();
-    mode_controls_stack.add_named(&arrange_controls, Some("arrange"));
-    mode_controls_stack.add_named(&crop_controls, Some("crop"));
-    mode_controls_stack.add_named(&color_controls, Some("color"));
+    mode_controls_stack.add_named(&arrange_sidebar.controls, Some("arrange"));
+    mode_controls_stack.add_named(&crop_sidebar.controls, Some("crop"));
+    mode_controls_stack.add_named(&color_sidebar.controls, Some("color"));
 
-    // Sidebar assembly
     let sidebar = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .width_request(180)
@@ -319,7 +192,7 @@ pub fn build(
     sidebar.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     sidebar.append(&mode_controls_stack);
 
-    // ---- Preview area ----
+    // ---- Preview area ------------------------------------------------------
     let preview_arrange = PreviewCanvas::new();
     preview_arrange.set_hexpand(true);
     preview_arrange.set_vexpand(true);
@@ -361,7 +234,7 @@ pub fn build(
     mode_preview_stack.add_named(picker.overlay(), Some("crop"));
     mode_preview_stack.add_named(&preview_color, Some("color"));
 
-    // ---- Grid ----
+    // ---- Grid --------------------------------------------------------------
     let factory = {
         let state = state.clone();
         let store = page_store.clone();
@@ -427,7 +300,7 @@ pub fn build(
     ));
     grid_scroll.add_controller(click_gesture);
 
-    // ---- Layout ----
+    // ---- Layout ------------------------------------------------------------
     let preview_area = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .hexpand(true)
@@ -453,14 +326,15 @@ pub fn build(
         .build();
     paned_sync.register(&paned);
 
-    // ---- Async receivers ----
+    // ---- Async receivers ---------------------------------------------------
     glib::MainContext::default().spawn_local({
         let preview_weak = preview_arrange.downgrade();
-        let preview_req_id = preview_req_id.clone();
+        let preview_req = preview_req.clone();
         let zoom_arrange = zoom_arrange.clone();
         async move {
+            let _svc = arrange_preview_svc;
             while let Ok((id, data)) = rx_prev_res.recv().await {
-                if id != preview_req_id.get() {
+                if !preview_req.is_current(id) {
                     continue;
                 }
                 let pb = gdk_pixbuf::Pixbuf::from_bytes(
@@ -483,11 +357,12 @@ pub fn build(
 
     glib::MainContext::default().spawn_local({
         let preview_weak = preview_color.downgrade();
-        let color_req_id = color_req_id.clone();
+        let color_req = color_req.clone();
         let zoom_color = zoom_color.clone();
         async move {
-            while let Ok(result) = rx_color_res.recv().await {
-                if result.id != color_req_id.get() {
+            let _svc = color_preview_svc;
+            while let Ok((id, result)) = rx_color_res.recv().await {
+                if !color_req.is_current(id) {
                     continue;
                 }
                 let pb = gdk_pixbuf::Pixbuf::from_bytes(
@@ -508,50 +383,132 @@ pub fn build(
         }
     });
 
-    // ---- AppEvent subscription ------------------------------------------
+    // ---- Thumbnail receiver -------------------------------------------------
     glib::MainContext::default().spawn_local({
-        let state = state.clone();
-        let selection = selection.clone();
-        let color_req_id = color_req_id.clone();
-        let tx_color = tx_color.clone();
         let page_store = page_store.clone();
-        let preview_arrange = preview_arrange.downgrade();
-        let preview_req_id = preview_req_id.clone();
-        let tx_prev = tx_prev.clone();
-        let current_mode = current_mode.clone();
+        let spinner = spinner.clone();
+        let pending_tasks = pending_tasks.clone();
         async move {
-            while let Ok(event) = event_rx.recv().await {
-                match event {
-                    AppEvent::GlobalSettingsChanged => {
-                        crate::widgets::color_preview::send_preview_req(
-                            &state,
-                            &selection,
-                            &color_req_id,
-                            &tx_color,
+            while let Ok(msg) = thumb_msg_rx.recv().await {
+                match msg {
+                    LoadMsg::Progress(id, data) => {
+                        let pb = gdk_pixbuf::Pixbuf::from_bytes(
+                            &data.bytes,
+                            gdk_pixbuf::Colorspace::Rgb,
+                            data.has_alpha,
+                            8,
+                            data.width,
+                            data.height,
+                            data.rowstride,
                         );
-                    }
-                    AppEvent::ProjectChanged => {
-                        sync_page_metadata(&page_store, &state);
-                        if current_mode.get() == Mode::Arrange {
-                            if let Some(preview) = preview_arrange.upgrade() {
-                                update_arrange_preview(
-                                    &selection,
-                                    &preview,
-                                    &preview_req_id,
-                                    &tx_prev,
-                                );
-                            }
+                        let item = (0..page_store.n_items())
+                            .filter_map(|i| page_store.item(i).and_downcast::<PageItem>())
+                            .find(|item| item.stable_id() == id);
+                        if let Some(item) = item {
+                            item.set_image(pb);
+                            item.set_dims(data.orig_width, data.orig_height);
                         }
                     }
-                    _ => {
-                        tracing::debug!("app event: {event:?}");
+                    LoadMsg::Finished => {
+                        decrement_pending(&pending_tasks, &spinner);
                     }
                 }
             }
         }
     });
 
-    // ---- Selection handler ----
+    // ---- AppEvent subscriber (projector) ------------------------------------
+    glib::MainContext::default().spawn_local({
+        let state = state.clone();
+        let selection = selection.clone();
+        let color_req = color_req.clone();
+        let page_store = page_store.clone();
+        let preview_arrange = preview_arrange.downgrade();
+        let preview_req = preview_req.clone();
+        let current_mode = current_mode.clone();
+        let count = count.clone();
+        let spinner = spinner.clone();
+        let pending_tasks = pending_tasks.clone();
+        async move {
+            while let Ok(event) = event_rx.recv().await {
+                match event {
+                    AppEvent::PagesAdded(ref indices) => {
+                        let items = projector_on_pages_added(&page_store, &state, indices);
+                        if !items.is_empty() {
+                            pending_tasks.set(pending_tasks.get() + items.len());
+                            spinner.set_visible(true);
+                            spinner.start();
+                            thumb_svc.enqueue_batch(items);
+                        }
+                        update_count(&count, &state);
+                    }
+                    AppEvent::PagesRemoved(ref indices) => {
+                        projector_on_pages_removed(&page_store, indices);
+                        update_count(&count, &state);
+                        if current_mode.get() == Mode::Arrange {
+                            if let Some(preview) = preview_arrange.upgrade() {
+                                update_arrange_preview(&selection, &preview, &preview_req);
+                            }
+                        }
+                    }
+                    AppEvent::PageChanged(idx) => {
+                        project_page_into_store(&page_store, &state, idx);
+                        if current_mode.get() == Mode::Arrange {
+                            if let Some(preview) = preview_arrange.upgrade() {
+                                update_arrange_preview(&selection, &preview, &preview_req);
+                            }
+                        }
+                    }
+                    AppEvent::PresetsChanged | AppEvent::GlobalSettingsChanged => {
+                        if current_mode.get() == Mode::Color {
+                            let project = state.project();
+                            crate::widgets::color_preview::send_preview_req(
+                                &project,
+                                &selection,
+                                &color_req,
+                            );
+                        }
+                    }
+                    AppEvent::ProjectLoaded => {
+                        let n = state.project().pages.len();
+                        let indices: Vec<usize> = (0..n).collect();
+                        let items = projector_on_pages_added(&page_store, &state, &indices);
+                        if !items.is_empty() {
+                            pending_tasks.set(pending_tasks.get() + items.len());
+                            spinner.set_visible(true);
+                            spinner.start();
+                            thumb_svc.enqueue_batch(items);
+                        }
+                        update_count(&count, &state);
+                        if current_mode.get() == Mode::Arrange {
+                            if let Some(preview) = preview_arrange.upgrade() {
+                                update_arrange_preview(&selection, &preview, &preview_req);
+                            }
+                        }
+                    }
+                    AppEvent::ProjectCleared => {
+                        page_store.remove_all();
+                        update_count(&count, &state);
+                        if let Some(preview) = preview_arrange.upgrade() {
+                            preview_req.send_dummy();
+                            preview.set_texture(None);
+                        }
+                    }
+                    AppEvent::ProjectChanged => {
+                        sync_page_metadata(&page_store, &state);
+                        update_count(&count, &state);
+                        if current_mode.get() == Mode::Arrange {
+                            if let Some(preview) = preview_arrange.upgrade() {
+                                update_arrange_preview(&selection, &preview, &preview_req);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    // ---- Selection handler -------------------------------------------------
     selection.connect_selection_changed(glib::clone!(
         #[strong]
         current_mode,
@@ -560,13 +517,9 @@ pub fn build(
         #[weak]
         preview_arrange,
         #[strong]
-        preview_req_id,
+        preview_req,
         #[strong]
-        tx_prev,
-        #[strong]
-        color_req_id,
-        #[strong]
-        tx_color,
+        color_req,
         #[strong]
         picker,
         #[strong]
@@ -575,22 +528,22 @@ pub fn build(
         selected_indices,
         #[strong]
         overlays,
-        #[strong]
-        preset_chips,
-        #[weak]
-        status_lbl,
-        #[strong]
-        mark_dirty,
-        #[weak]
-        rotate_ccw,
-        #[weak]
-        rotate_cw,
-        #[weak]
-        rotate_180,
-        #[weak]
-        delete_btn,
+        #[strong(rename_to = chips)]
+        crop_sidebar.preset_chips,
+        #[weak(rename_to = sl)]
+        crop_sidebar.status_lbl,
+        #[weak(rename_to = rotate_ccw)]
+        arrange_sidebar.rotate_ccw,
+        #[weak(rename_to = rotate_cw)]
+        arrange_sidebar.rotate_cw,
+        #[weak(rename_to = rotate_180)]
+        arrange_sidebar.rotate_180,
+        #[weak(rename_to = delete_btn)]
+        arrange_sidebar.delete_btn,
         #[weak]
         page_store,
+        #[strong]
+        preset_callbacks,
         move |sel, _, _| {
             let bitset = sel.selection();
             let n = page_store.n_items();
@@ -610,126 +563,80 @@ pub fn build(
 
             match current_mode.get() {
                 Mode::Arrange => {
-                    update_arrange_preview(sel, &preview_arrange, &preview_req_id, &tx_prev);
+                    update_arrange_preview(sel, &preview_arrange, &preview_req);
                 }
                 Mode::Crop => {
                     let first = bitset.minimum();
                     if first == u32::MAX {
-                        current_index.set(-1);
+                        current_index.set(None);
                         picker.clear();
-                        crate::widgets::preset_chips::refresh_preset_chips(
-                            &preset_chips,
-                            &state,
-                            current_index.clone(),
-                            &picker,
-                            &overlays,
-                            &selected_indices,
-                            &mark_dirty,
-                        );
-                        status_lbl.set_label("No page selected");
+                        {
+                            let project = state.project();
+                            crate::widgets::preset_chips::refresh_preset_chips(
+                                &chips,
+                                &project,
+                                current_index.clone(),
+                                &picker,
+                                &overlays,
+                                &selected_indices,
+                                &preset_callbacks,
+                            );
+                        }
+                        sl.set_label("No page selected");
                     } else {
-                        current_index.set(first as i32);
+                        current_index.set(Some(first as usize));
                         picker.bind(state.clone(), first as usize);
-                        crate::widgets::preset_chips::refresh_preset_chips(
-                            &preset_chips,
-                            &state,
-                            current_index.clone(),
-                            &picker,
-                            &overlays,
-                            &selected_indices,
-                            &mark_dirty,
-                        );
-                        crate::widgets::crop_overlay::update_status_label(&status_lbl, &state, first as i32);
+                        {
+                            let project = state.project();
+                            crate::widgets::preset_chips::refresh_preset_chips(
+                                &chips,
+                                &project,
+                                current_index.clone(),
+                                &picker,
+                                &overlays,
+                                &selected_indices,
+                                &preset_callbacks,
+                            );
+                        }
+                        crate::widgets::crop_overlay::update_status_label(&sl, &state, Some(first as usize));
                     }
                 }
                 Mode::Color => {
-                    crate::widgets::color_preview::send_preview_req(&state, sel, &color_req_id, &tx_color);
+                    {
+                        let project = state.project();
+                        crate::widgets::color_preview::send_preview_req(&project, sel, &color_req);
+                    }
                 }
             }
         }
     ));
 
-    // ---- Crop picker on_changed ----
+    // ---- Crop picker on_changed --------------------------------------------
     picker.connect_changed({
         let state = state.clone();
-        let chips = preset_chips.clone();
-        let sl = status_lbl.clone();
+        let cb = preset_callbacks.clone();
+        let chips = crop_sidebar.preset_chips.clone();
+        let sl = crop_sidebar.status_lbl.clone();
         let ci = current_index.clone();
         let p = picker.clone();
         let ov = overlays.clone();
         let sel_indices = selected_indices.clone();
-        let mark_dirty = mark_dirty.clone();
         move || {
-            let idx = ci.get();
-            if idx < 0 {
+            let Some(idx) = ci.get() else {
                 return;
-            }
-            crate::widgets::preset_chips::refresh_preset_chips(
-                &chips, &state, ci.clone(), &p, &ov, &sel_indices, &mark_dirty,
-            );
-            crate::widgets::crop_overlay::update_status_label(&sl, &state, idx);
-            crate::widgets::crop_overlay::queue_all_overlays(&ov);
-            mark_dirty();
-        }
-    });
-
-    // ---- New-preset button ----
-    btn_new.connect_clicked({
-        let state = state.clone();
-        let picker = picker.clone();
-        let chips = preset_chips.clone();
-        let sl = status_lbl.clone();
-        let ci = current_index.clone();
-        let p = picker.clone();
-        let ov = overlays.clone();
-        let sel_indices = selected_indices.clone();
-        let mark_dirty = mark_dirty.clone();
-        move |_| {
-            let idx = ci.get();
-            if idx < 0 {
-                return;
-            }
-            let (w, h) = {
-                let project = state.project();
-                match project.pages.get(idx as usize) {
-                    Some(page) => match page.crop {
-                        Some(c) => (c.w, c.h),
-                        None => {
-                            let (iw, ih) = picker.image_dims();
-                            (iw.max(1.0) as u32, ih.max(1.0) as u32)
-                        }
-                    },
-                    None => return,
-                }
             };
-            let pi = state.project().crop_presets.len();
-            let name = format!("Preset {}", pi + 1);
-            state.dispatch(Command::AddCropPreset(recto_core::CropPreset {
-                name,
-                w,
-                h,
-                locked: false,
-            }));
-            state.dispatch(Command::SetCropPreset {
-                index: idx as usize,
-                preset: Some(pi),
-            });
-            state.dispatch(Command::SetCrop {
-                index: idx as usize,
-                crop: Some(recto_core::CropBox { x: 0, y: 0, w, h }),
-            });
-            picker.set_crop(Some(recto_core::Rect::new(
-                0.0, 0.0, w as f64, h as f64,
-            )));
-            crate::widgets::preset_chips::refresh_preset_chips(
-                &chips, &state, ci.clone(), &p, &ov, &sel_indices, &mark_dirty,
-            );
-            crate::widgets::crop_overlay::update_status_label(&sl, &state, idx);
-            mark_dirty();
+            {
+                let project = state.project();
+                crate::widgets::preset_chips::refresh_preset_chips(
+                    &chips, &project, ci.clone(), &p, &ov, &sel_indices, &cb,
+                );
+            }
+            crate::widgets::crop_overlay::update_status_label(&sl, &state, Some(idx));
+            crate::widgets::crop_overlay::queue_all_overlays(&ov);
         }
     });
 
-    // ---- Mode switch handlers ----
+    // ---- Mode switch handlers ----------------------------------------------
     btn_arrange.connect_toggled(glib::clone!(
         #[strong]
         current_mode,
@@ -742,9 +649,7 @@ pub fn build(
         #[weak]
         preview_arrange,
         #[strong]
-        preview_req_id,
-        #[strong]
-        tx_prev,
+        preview_req,
         #[strong]
         overlays,
         move |btn| {
@@ -754,7 +659,7 @@ pub fn build(
             current_mode.set(Mode::Arrange);
             mode_preview_stack.set_visible_child_name("arrange");
             mode_controls_stack.set_visible_child_name("arrange");
-            update_arrange_preview(&selection, &preview_arrange, &preview_req_id, &tx_prev);
+            update_arrange_preview(&selection, &preview_arrange, &preview_req);
             crate::widgets::crop_overlay::queue_all_overlays(&overlays);
         }
     ));
@@ -778,16 +683,16 @@ pub fn build(
         current_index,
         #[strong]
         selected_indices,
-        #[strong]
-        preset_chips,
-        #[weak]
-        status_lbl,
+        #[strong(rename_to = chips)]
+        crop_sidebar.preset_chips,
+        #[weak(rename_to = sl)]
+        crop_sidebar.status_lbl,
         #[strong]
         overlays,
         #[strong]
         crop_initialised,
         #[strong]
-        mark_dirty,
+        preset_callbacks,
         move |btn| {
             if !btn.is_active() {
                 return;
@@ -798,7 +703,8 @@ pub fn build(
 
             if !crop_initialised.get() {
                 crop_initialised.set(true);
-                crate::widgets::preset_chips::auto_detect_presets(&state, &page_store);
+                let project = state.project().clone();
+                crate::widgets::preset_chips::auto_detect_presets(&project, &page_store, &preset_callbacks);
             }
 
             let bs = selection.selection();
@@ -812,31 +718,37 @@ pub fn build(
             };
 
             if first == u32::MAX {
-                current_index.set(-1);
+                current_index.set(None);
                 picker.clear();
-                crate::widgets::preset_chips::refresh_preset_chips(
-                    &preset_chips,
-                    &state,
-                    current_index.clone(),
-                    &picker,
-                    &overlays,
-                    &selected_indices,
-                    &mark_dirty,
-                );
-                status_lbl.set_label("No page selected");
+                {
+                    let project = state.project();
+                    crate::widgets::preset_chips::refresh_preset_chips(
+                        &chips,
+                        &project,
+                        current_index.clone(),
+                        &picker,
+                        &overlays,
+                        &selected_indices,
+                        &preset_callbacks,
+                    );
+                }
+                sl.set_label("No page selected");
             } else {
-                current_index.set(first as i32);
+                current_index.set(Some(first as usize));
                 picker.bind(state.clone(), first as usize);
-                crate::widgets::preset_chips::refresh_preset_chips(
-                    &preset_chips,
-                    &state,
-                    current_index.clone(),
-                    &picker,
-                    &overlays,
-                    &selected_indices,
-                    &mark_dirty,
-                );
-                crate::widgets::crop_overlay::update_status_label(&status_lbl, &state, first as i32);
+                {
+                    let project = state.project();
+                    crate::widgets::preset_chips::refresh_preset_chips(
+                        &chips,
+                        &project,
+                        current_index.clone(),
+                        &picker,
+                        &overlays,
+                        &selected_indices,
+                        &preset_callbacks,
+                    );
+                }
+                crate::widgets::crop_overlay::update_status_label(&sl, &state, Some(first as usize));
             }
             crate::widgets::crop_overlay::queue_all_overlays(&overlays);
         }
@@ -854,9 +766,7 @@ pub fn build(
         #[strong]
         selection,
         #[strong]
-        color_req_id,
-        #[strong]
-        tx_color,
+        color_req,
         #[strong]
         overlays,
         move |btn| {
@@ -866,208 +776,34 @@ pub fn build(
             current_mode.set(Mode::Color);
             mode_preview_stack.set_visible_child_name("color");
             mode_controls_stack.set_visible_child_name("color");
-            crate::widgets::color_preview::send_preview_req(&state, &selection, &color_req_id, &tx_color);
+            {
+                let project = state.project();
+                crate::widgets::color_preview::send_preview_req(&project, &selection, &color_req);
+            }
             crate::widgets::crop_overlay::queue_all_overlays(&overlays);
         }
     ));
 
-    // ---- Arrange action handlers ----
-    add_btn.connect_clicked(glib::clone!(
-        #[strong]
+    // ---- Wire per-mode handlers --------------------------------------------
+    arrange::wire_arrange_handlers(
+        &arrange_sidebar,
+        state.clone(),
+        selection.clone(),
         load_images,
-        move |btn| {
-            let dialog = gtk::FileDialog::builder()
-                .title("Add page images")
-                .modal(true)
-                .build();
-            let filter = gtk::FileFilter::new();
-            filter.set_name(Some("Images"));
-            for mime in ["image/jpeg", "image/png", "image/tiff", "image/webp", "image/bmp"] {
-                filter.add_mime_type(mime);
-            }
-            let filters = gio::ListStore::new::<gtk::FileFilter>();
-            filters.append(&filter);
-            dialog.set_filters(Some(&filters));
-            let parent = btn.root().and_downcast::<gtk::Window>();
-            dialog.open_multiple(
-                parent.as_ref(),
-                gio::Cancellable::NONE,
-                glib::clone!(
-                    #[strong]
-                    load_images,
-                    move |result| {
-                        let Ok(files) = result else { return };
-                        let mut paths = Vec::new();
-                        for i in 0..files.n_items() {
-                            let Some(file) = files.item(i).and_downcast::<gio::File>() else {
-                                continue;
-                            };
-                            if let Some(path) = file.path() {
-                                paths.push(path);
-                            }
-                        }
-                        load_images(paths);
-                    }
-                ),
-            );
-        }
-    ));
+        paned.clone(),
+    );
 
-    let drop_target = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
-    drop_target.connect_drop(glib::clone!(
-        #[strong]
-        load_images,
-        move |_, value, _, _| {
-            let Ok(file_list) = value.get::<gdk::FileList>() else {
-                return false;
-            };
-            let paths: Vec<_> = file_list.files().iter().filter_map(|f| f.path()).collect();
-            load_images(paths);
-            true
-        }
-    ));
-    paned.add_controller(drop_target);
+    crop::wire_crop_handlers(
+        &crop_sidebar,
+        state.clone(),
+        preset_callbacks.clone(),
+        picker.clone(),
+        current_index.clone(),
+        overlays.clone(),
+        selected_indices.clone(),
+    );
 
-    rotate_ccw.connect_clicked(glib::clone!(
-        #[strong]
-        state,
-        #[weak]
-        page_store,
-        #[strong]
-        selection,
-        #[weak]
-        preview_arrange,
-        #[strong]
-        preview_req_id,
-        #[strong]
-        tx_prev,
-        #[strong]
-        mark_dirty,
-        move |_| {
-            rotate_selected(&selection, &page_store, &state, -90);
-            update_arrange_preview(&selection, &preview_arrange, &preview_req_id, &tx_prev);
-            mark_dirty();
-        }
-    ));
-
-    rotate_cw.connect_clicked(glib::clone!(
-        #[strong]
-        state,
-        #[weak]
-        page_store,
-        #[strong]
-        selection,
-        #[weak]
-        preview_arrange,
-        #[strong]
-        preview_req_id,
-        #[strong]
-        tx_prev,
-        #[strong]
-        mark_dirty,
-        move |_| {
-            rotate_selected(&selection, &page_store, &state, 90);
-            update_arrange_preview(&selection, &preview_arrange, &preview_req_id, &tx_prev);
-            mark_dirty();
-        }
-    ));
-
-    rotate_180.connect_clicked(glib::clone!(
-        #[strong]
-        state,
-        #[weak]
-        page_store,
-        #[strong]
-        selection,
-        #[weak]
-        preview_arrange,
-        #[strong]
-        preview_req_id,
-        #[strong]
-        tx_prev,
-        #[strong]
-        mark_dirty,
-        move |_| {
-            rotate_selected(&selection, &page_store, &state, 180);
-            update_arrange_preview(&selection, &preview_arrange, &preview_req_id, &tx_prev);
-            mark_dirty();
-        }
-    ));
-
-    delete_btn.connect_clicked(glib::clone!(
-        #[strong]
-        state,
-        #[weak]
-        page_store,
-        #[strong]
-        selection,
-        #[weak]
-        count,
-        #[weak]
-        preview_arrange,
-        #[strong]
-        preview_req_id,
-        #[strong]
-        tx_prev,
-        #[strong]
-        mark_dirty,
-        move |_| {
-            let mut positions = selected_positions(&selection);
-            positions.sort_unstable_by(|a, b| b.cmp(a));
-            if positions.is_empty() {
-                return;
-            }
-            let indices: Vec<usize> = positions.iter().map(|&p| p as usize).collect();
-            state.dispatch(Command::RemovePages(indices));
-            for pos in positions {
-                page_store.remove(pos);
-            }
-            crate::widgets::thumbnail_loader::update_count(&count, &state);
-            update_arrange_preview(&selection, &preview_arrange, &preview_req_id, &tx_prev);
-            mark_dirty();
-        }
-    ));
-
-    // ---- Color slider handlers ----
-    brightness_scale.connect_value_changed(glib::clone!(
-        #[strong]
-        state,
-        #[strong]
-        mark_dirty,
-        move |scale| {
-            state.dispatch(Command::SetBrightness(recto_core::Brightness::new(scale.value() as f32)));
-            mark_dirty();
-        }
-    ));
-
-    contrast_scale.connect_value_changed(glib::clone!(
-        #[strong]
-        state,
-        #[strong]
-        mark_dirty,
-        move |scale| {
-            state.dispatch(Command::SetContrast(recto_core::Contrast::new(scale.value() as f32)));
-            mark_dirty();
-        }
-    ));
-
-    reset_btn.connect_clicked(glib::clone!(
-        #[strong]
-        state,
-        #[strong]
-        mark_dirty,
-        #[weak]
-        brightness_scale,
-        #[weak]
-        contrast_scale,
-        move |_| {
-            state.dispatch(Command::SetBrightness(recto_core::Brightness::ZERO));
-            state.dispatch(Command::SetContrast(recto_core::Contrast::ZERO));
-            brightness_scale.set_value(0.0);
-            contrast_scale.set_value(0.0);
-            mark_dirty();
-        }
-    ));
+    color::wire_color_handlers(&color_sidebar, state.clone());
 
     paned.upcast()
 }

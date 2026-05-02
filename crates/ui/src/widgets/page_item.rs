@@ -1,4 +1,5 @@
 use gtk::{gdk, gdk_pixbuf, glib, prelude::*, subclass::prelude::*};
+use recto_core::Rotation;
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 
@@ -103,11 +104,6 @@ impl PageItem {
         self.imp().base_height.get()
     }
 
-    pub fn apply_rotation_delta(&self, delta: i32) {
-        let new = ((self.rotation() as i32 + delta).rem_euclid(360)) as u32;
-        self.set_rotation_absolute(new);
-    }
-
     /// Set rotation to an absolute value and re-render the thumbnail.
     pub fn set_rotation_absolute(&self, deg: u32) {
         self.set_rotation(deg);
@@ -121,6 +117,14 @@ impl PageItem {
 
     pub fn path(&self) -> PathBuf {
         self.imp().path.borrow().clone()
+    }
+
+    pub fn rotation_value(&self) -> Rotation {
+        Rotation::new(self.rotation() as u16)
+    }
+
+    pub fn set_rotation_value(&self, r: Rotation) {
+        self.set_rotation_absolute(r.as_degrees() as u32);
     }
 }
 

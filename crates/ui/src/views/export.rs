@@ -4,9 +4,9 @@ use std::rc::Rc;
 use adw::prelude::*;
 use gtk::{gio, glib};
 
-use crate::app::{MarkDirty, State};
-use crate::worker::Worker;
-use recto_core::config::{load_pdf_meta, save_pdf_meta};
+use crate::app::State;
+use crate::worker::JobQueue;
+use recto_core::{load_pdf_meta, save_pdf_meta};
 use recto_core::{Command, ExportSettings, JpegQuality, PdfMeta};
 
 enum ExportMsg {
@@ -14,7 +14,7 @@ enum ExportMsg {
     Done(Vec<(bool, String)>),
 }
 
-pub fn show_export_dialog(state: State, mark_dirty: MarkDirty, parent: &gtk::Window, worker: Rc<Worker>) {
+pub fn show_export_dialog(state: State, parent: &gtk::Window, job_queue: Rc<JobQueue>) {
     let dialog = adw::Window::builder()
         .title("Export")
         .modal(true)
@@ -26,12 +26,12 @@ pub fn show_export_dialog(state: State, mark_dirty: MarkDirty, parent: &gtk::Win
     let header = adw::HeaderBar::new();
     let toolbar_view = adw::ToolbarView::new();
     toolbar_view.add_top_bar(&header);
-    toolbar_view.set_content(Some(&build_export_content(state, mark_dirty, worker)));
+    toolbar_view.set_content(Some(&build_export_content(state, job_queue)));
     dialog.set_content(Some(&toolbar_view));
     dialog.present();
 }
 
-fn build_export_content(state: State, mark_dirty: MarkDirty, worker: Rc<Worker>) -> gtk::Widget {
+fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
     let (tx, rx) = async_channel::unbounded::<ExportMsg>();
 
     // PDF metadata — loaded from ~/.config/recto/pdf_meta.json once.
@@ -232,7 +232,6 @@ fn build_export_content(state: State, mark_dirty: MarkDirty, worker: Rc<Worker>)
     dir_btn.connect_clicked({
         let state = state.clone();
         let dir_lbl = dir_lbl.clone();
-        let mark_dirty = mark_dirty.clone();
         move |btn| {
             let dialog = gtk::FileDialog::builder()
                 .title("Choose Output Directory")
@@ -241,35 +240,14 @@ fn build_export_content(state: State, mark_dirty: MarkDirty, worker: Rc<Worker>)
             let parent = btn.root().and_downcast::<gtk::Window>();
             let state = state.clone();
             let dir_lbl = dir_lbl.clone();
-            let mark_dirty = mark_dirty.clone();
             dialog.select_folder(parent.as_ref(), gio::Cancellable::NONE, move |res| {
                 let Ok(file) = res else { return };
                 let Some(path) = file.path() else { return };
                 dir_lbl.set_label(&path.display().to_string());
                 state.dispatch(Command::SetOutputDir(path));
-                mark_dirty();
             });
         }
     });
-
-    prefix_entry.connect_changed({
-        let mark_dirty = mark_dirty.clone();
-        move |_| mark_dirty()
-    });
-    quality_scale.connect_value_changed({
-        let mark_dirty = mark_dirty.clone();
-        move |_| mark_dirty()
-    });
-    for btn in [&btn_jpeg, &btn_png, &btn_tiff, &btn_pdf] {
-        btn.connect_toggled({
-            let mark_dirty = mark_dirty.clone();
-            move |b| {
-                if b.is_active() {
-                    mark_dirty();
-                }
-            }
-        });
-    }
 
     // Show/hide quality and metadata rows based on active format.
     let update_rows_visibility = {
@@ -311,7 +289,7 @@ fn build_export_content(state: State, mark_dirty: MarkDirty, worker: Rc<Worker>)
         let result_buf = result_buf.clone();
         let tx = tx.clone();
         let pdf_meta = pdf_meta.clone();
-        let worker = worker.clone();
+        let job_queue = job_queue.clone();
         move |_| {
             let quality = JpegQuality::new(quality_adj.value() as u8);
             let format = if btn_jpeg.is_active() {
@@ -350,8 +328,8 @@ fn build_export_content(state: State, mark_dirty: MarkDirty, worker: Rc<Worker>)
             if matches!(format, ExportSettings::Pdf { .. }) {
                 let meta = pdf_meta.borrow().clone();
                 let out_path = project.output_dir.join(format!("{}.pdf", project.prefix));
-                let worker = worker.clone();
-                worker.spawn(move || {
+                let job_queue = job_queue.clone();
+                job_queue.spawn(move || {
                     let total = project.pages.len();
                     let result = recto_core::export::export_to_pdf(
                         &project,
@@ -375,8 +353,8 @@ fn build_export_content(state: State, mark_dirty: MarkDirty, worker: Rc<Worker>)
                     let _ = tx.send_blocking(ExportMsg::Done(lines));
                 });
             } else {
-                let worker = worker.clone();
-                worker.spawn(move || {
+                let job_queue = job_queue.clone();
+                job_queue.spawn(move || {
                     let total = project.pages.len();
                     let results = recto_core::export::run_batch(&project, |done, _| {
                         let _ = tx.send_blocking(ExportMsg::Progress(done, total));

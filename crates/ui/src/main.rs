@@ -1,4 +1,5 @@
 mod app;
+mod latest;
 mod types;
 mod views;
 mod widgets;

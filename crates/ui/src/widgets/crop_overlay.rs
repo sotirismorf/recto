@@ -110,24 +110,28 @@ pub(crate) fn draw_crop_overlay(
     let _ = cr.stroke();
 }
 
-pub(crate) fn update_status_label(lbl: &gtk::Label, state: &State, index: i32) {
+pub(crate) fn update_status_label(lbl: &gtk::Label, state: &State, index: Option<usize>) {
     let project = state.project();
-    let text = if index >= 0 && (index as usize) < project.pages.len() {
-        let page = &project.pages[index as usize];
-        let mut t = format!("Page {}/{}", index + 1, project.pages.len());
-        if let Some(pi) = page.crop_preset {
-            if let Some(p) = project.crop_presets.get(pi) {
-                let locked = if p.locked { " \u{1f512}" } else { " \u{1f513}" };
-                t.push_str(&format!(
-                    " | Preset: {} ({}×{}{})",
-                    p.name, p.w, p.h, locked
-                ));
+    let text = if let Some(idx) = index {
+        if idx < project.pages.len() {
+            let page = &project.pages[idx];
+            let mut t = format!("Page {}/{}", idx + 1, project.pages.len());
+            if let Some(pi) = page.crop_preset {
+                if let Some(p) = project.crop_presets.get(pi) {
+                    let locked = if p.locked { " \u{1f512}" } else { " \u{1f513}" };
+                    t.push_str(&format!(
+                        " | Preset: {} ({}×{}{})",
+                        p.name, p.w, p.h, locked
+                    ));
+                }
             }
+            if let Some(c) = page.crop {
+                t.push_str(&format!(" | Crop: {}×{} @ ({}, {})", c.w, c.h, c.x, c.y));
+            }
+            t
+        } else {
+            String::from("No page selected")
         }
-        if let Some(c) = page.crop {
-            t.push_str(&format!(" | Crop: {}×{} @ ({}, {})", c.w, c.h, c.x, c.y));
-        }
-        t
     } else {
         String::from("No page selected")
     };

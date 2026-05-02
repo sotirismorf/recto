@@ -5,39 +5,42 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
-use crate::widgets::crop_picker::CropPicker;
 use crate::widgets::crop_overlay::queue_all_overlays;
+use crate::widgets::crop_picker::CropPicker;
 use crate::widgets::page_item::PageItem;
-use crate::app::{MarkDirty, State};
-use recto_core::{CropBox, CropPreset, Rect};
+use recto_core::{CropBox, CropPreset, Project, Rect};
+
+pub(crate) struct PresetCallbacks {
+    pub get_project: Rc<dyn Fn() -> Project>,
+    pub on_set_crop_preset: Rc<dyn Fn(usize, Option<usize>)>,
+    pub on_set_crop: Rc<dyn Fn(usize, Option<CropBox>)>,
+    pub on_set_crop_preset_locked: Rc<dyn Fn(usize, bool)>,
+    pub on_remove_crop_preset: Rc<dyn Fn(usize)>,
+    pub on_add_crop_preset: Rc<dyn Fn(CropPreset)>,
+}
 
 pub(crate) fn refresh_preset_chips(
     chip_box: &gtk::Box,
-    state: &State,
-    current_index: Rc<Cell<i32>>,
+    project: &Project,
+    current_index: Rc<Cell<Option<usize>>>,
     picker: &Rc<CropPicker>,
     overlays: &Rc<RefCell<Vec<glib::WeakRef<gtk::DrawingArea>>>>,
     selected_indices: &Rc<RefCell<Vec<usize>>>,
-    mark_dirty: &MarkDirty,
+    callbacks: &PresetCallbacks,
 ) {
     while let Some(child) = chip_box.first_child() {
         chip_box.remove(&child);
     }
 
-    let project = state.project();
     let n_presets = project.crop_presets.len();
     if n_presets == 0 {
         return;
     }
 
-    let current_preset: Option<usize> = {
-        let idx = current_index.get();
-        if idx >= 0 {
-            project.pages.get(idx as usize).and_then(|p| p.crop_preset)
-        } else {
-            None
-        }
-    };
+    let current_preset: Option<usize> = current_index
+        .get()
+        .and_then(|idx| project.pages.get(idx))
+        .and_then(|p| p.crop_preset);
 
     let mut refs: Vec<usize> = vec![0; n_presets];
     for page in project.pages.iter() {
@@ -67,16 +70,22 @@ pub(crate) fn refresh_preset_chips(
         label_btn.set_tooltip_text(Some(&format!("{} ({}×{})", label_str, preset.w, preset.h)));
 
         {
-            let state = state.clone();
             let ci = current_index.clone();
             let picker_weak = Rc::downgrade(picker);
             let chips_weak = chip_box.downgrade();
             let sel = selected_indices.clone();
             let ov = overlays.clone();
-            let mark_dirty = mark_dirty.clone();
             let pi = i;
             let pw = preset.w;
             let ph = preset.h;
+            let cb_clone = PresetCallbacks {
+                get_project: callbacks.get_project.clone(),
+                on_set_crop_preset: callbacks.on_set_crop_preset.clone(),
+                on_set_crop: callbacks.on_set_crop.clone(),
+                on_set_crop_preset_locked: callbacks.on_set_crop_preset_locked.clone(),
+                on_remove_crop_preset: callbacks.on_remove_crop_preset.clone(),
+                on_add_crop_preset: callbacks.on_add_crop_preset.clone(),
+            };
             label_btn.connect_clicked(move |_| {
                 let Some(picker) = picker_weak.upgrade() else {
                     return;
@@ -90,13 +99,13 @@ pub(crate) fn refresh_preset_chips(
                 }
                 let (iw, ih) = picker.image_dims();
                 let mut new_first: Option<Rect> = None;
+                let mut crops: Vec<(usize, CropBox)> = Vec::new();
                 {
-                    let mut project = state.project_mut();
+                    let project = (cb_clone.get_project)();
                     for &idx in &targets {
-                        let Some(page) = project.pages.get_mut(idx) else {
+                        let Some(page) = project.pages.get(idx) else {
                             continue;
                         };
-                        page.crop_preset = Some(pi);
                         let mut cb = page.crop.unwrap_or(CropBox {
                             x: 0,
                             y: 0,
@@ -111,17 +120,21 @@ pub(crate) fn refresh_preset_chips(
                         if ih > 0.0 && cb.y as f64 + ph as f64 > ih {
                             cb.y = (ih as u32).saturating_sub(ph);
                         }
-                        page.crop = Some(cb);
                         if new_first.is_none() {
                             new_first = Some(Rect::from(cb));
                         }
+                        crops.push((idx, cb));
                     }
+                }
+                for (idx, cb) in crops {
+                    (cb_clone.on_set_crop_preset)(idx, Some(pi));
+                    (cb_clone.on_set_crop)(idx, Some(cb));
                 }
                 if let Some(r) = new_first {
                     picker.set_crop(Some(r));
                 }
-                refresh_preset_chips(&chips, &state, ci.clone(), &picker, &ov, &sel, &mark_dirty);
-                mark_dirty();
+                let project = (cb_clone.get_project)();
+                refresh_preset_chips(&chips, &project, ci.clone(), &picker, &ov, &sel, &cb_clone);
             });
         }
 
@@ -138,20 +151,24 @@ pub(crate) fn refresh_preset_chips(
             lock_btn.set_tooltip_text(Some("Locked — drag won't change the preset size"));
         } else {
             lock_btn.set_icon_name("changes-allow-symbolic");
-            lock_btn.set_tooltip_text(Some(
-                "Unlocked — drag updates the preset for all pages in this group",
-            ));
+            lock_btn.set_tooltip_text(Some("Unlocked — drag updates the preset for all pages in this group"));
         }
 
         {
-            let state = state.clone();
             let chips_weak = chip_box.downgrade();
             let ci = current_index.clone();
             let picker_weak = Rc::downgrade(picker);
             let ov = overlays.clone();
             let sel = selected_indices.clone();
-            let mark_dirty = mark_dirty.clone();
             let pi = i;
+            let cb_clone = PresetCallbacks {
+                get_project: callbacks.get_project.clone(),
+                on_set_crop_preset: callbacks.on_set_crop_preset.clone(),
+                on_set_crop: callbacks.on_set_crop.clone(),
+                on_set_crop_preset_locked: callbacks.on_set_crop_preset_locked.clone(),
+                on_remove_crop_preset: callbacks.on_remove_crop_preset.clone(),
+                on_add_crop_preset: callbacks.on_add_crop_preset.clone(),
+            };
             lock_btn.connect_toggled(move |btn| {
                 let locked = btn.is_active();
                 if locked {
@@ -159,27 +176,13 @@ pub(crate) fn refresh_preset_chips(
                     btn.set_tooltip_text(Some("Locked — drag won't change the preset size"));
                 } else {
                     btn.set_icon_name("changes-allow-symbolic");
-                    btn.set_tooltip_text(Some(
-                        "Unlocked — drag updates the preset for all pages in this group",
-                    ));
+                    btn.set_tooltip_text(Some("Unlocked — drag updates the preset for all pages in this group"));
                 }
-                let mut project = state.project_mut();
-                if let Some(p) = project.crop_presets.get_mut(pi) {
-                    p.locked = locked;
-                }
-                drop(project);
+                (cb_clone.on_set_crop_preset_locked)(pi, locked);
                 if let (Some(picker), Some(chips)) = (picker_weak.upgrade(), chips_weak.upgrade()) {
-                    refresh_preset_chips(
-                        &chips,
-                        &state,
-                        ci.clone(),
-                        &picker,
-                        &ov,
-                        &sel,
-                        &mark_dirty,
-                    );
+                    let project = (cb_clone.get_project)();
+                    refresh_preset_chips(&chips, &project, ci.clone(), &picker, &ov, &sel, &cb_clone);
                 }
-                mark_dirty();
             });
         }
 
@@ -195,14 +198,20 @@ pub(crate) fn refresh_preset_chips(
             close_btn.add_css_class("preset-close");
 
             {
-                let state = state.clone();
                 let chips_weak = chip_box.downgrade();
                 let ci = current_index.clone();
                 let picker_weak = Rc::downgrade(picker);
                 let ov = overlays.clone();
                 let sel = selected_indices.clone();
-                let mark_dirty = mark_dirty.clone();
                 let pi = i;
+                let cb_clone = PresetCallbacks {
+                    get_project: callbacks.get_project.clone(),
+                    on_set_crop_preset: callbacks.on_set_crop_preset.clone(),
+                    on_set_crop: callbacks.on_set_crop.clone(),
+                    on_set_crop_preset_locked: callbacks.on_set_crop_preset_locked.clone(),
+                    on_remove_crop_preset: callbacks.on_remove_crop_preset.clone(),
+                    on_add_crop_preset: callbacks.on_add_crop_preset.clone(),
+                };
                 close_btn.connect_clicked(move |_| {
                     let Some(picker) = picker_weak.upgrade() else {
                         return;
@@ -210,29 +219,17 @@ pub(crate) fn refresh_preset_chips(
                     let Some(chips) = chips_weak.upgrade() else {
                         return;
                     };
-                    delete_preset(&state, pi);
-                    {
-                        let project = state.project();
-                        let idx = ci.get();
-                        if idx >= 0 {
-                            if let Some(page) = project.pages.get(idx as usize) {
-                                if page.crop_preset.is_none() {
-                                    drop(project);
-                                    picker.set_crop(None);
-                                }
+                    (cb_clone.on_remove_crop_preset)(pi);
+                    if let Some(idx) = ci.get() {
+                        let project = (cb_clone.get_project)();
+                        if let Some(page) = project.pages.get(idx) {
+                            if page.crop_preset.is_none() {
+                                picker.set_crop(None);
                             }
                         }
                     }
-                    refresh_preset_chips(
-                        &chips,
-                        &state,
-                        ci.clone(),
-                        &picker,
-                        &ov,
-                        &sel,
-                        &mark_dirty,
-                    );
-                    mark_dirty();
+                    let project = (cb_clone.get_project)();
+                    refresh_preset_chips(&chips, &project, ci.clone(), &picker, &ov, &sel, &cb_clone);
                 });
             }
 
@@ -244,29 +241,11 @@ pub(crate) fn refresh_preset_chips(
     queue_all_overlays(overlays);
 }
 
-fn delete_preset(state: &State, pi: usize) {
-    let mut project = state.project_mut();
-    if pi >= project.crop_presets.len() {
-        return;
-    }
-    project.crop_presets.remove(pi);
-    for page in project.pages.iter_mut() {
-        match page.crop_preset {
-            Some(p) if p == pi => {
-                page.crop_preset = None;
-                page.crop = None;
-            }
-            Some(p) if p > pi => page.crop_preset = Some(p - 1),
-            _ => {}
-        }
-    }
-    for (i, preset) in project.crop_presets.iter_mut().enumerate() {
-        preset.name = format!("Preset {}", i + 1);
-    }
-}
-
-pub(crate) fn auto_detect_presets(state: &State, page_store: &gio::ListStore) {
-    let mut project = state.project_mut();
+pub(crate) fn auto_detect_presets(
+    project: &Project,
+    page_store: &gio::ListStore,
+    callbacks: &PresetCallbacks,
+) {
     if !project.crop_presets.is_empty() {
         return;
     }
@@ -274,19 +253,26 @@ pub(crate) fn auto_detect_presets(state: &State, page_store: &gio::ListStore) {
     if n == 0 {
         return;
     }
+    let page_info: Vec<_> = (0..n)
+        .map(|i| {
+            let item = page_store.item(i as u32).and_downcast::<PageItem>();
+            let rot = project
+                .pages
+                .get(i)
+                .map(|p| p.rotation.as_degrees() % 360)
+                .unwrap_or(0);
+            (item, rot)
+        })
+        .collect();
 
     let mut dim_groups: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
-    for i in 0..n {
-        let item = match page_store.item(i as u32).and_downcast::<PageItem>() {
-            Some(it) => it,
-            None => continue,
-        };
+    for (i, (item, rot)) in page_info.iter().enumerate() {
+        let Some(item) = item else { continue };
         let dims = {
             let w = item.base_width();
             let h = item.base_height();
             if w > 0 && h > 0 {
-                let rot = project.pages.get(i).map(|p| p.rotation.as_degrees() % 360).unwrap_or(0);
-                if rot == 90 || rot == 270 {
+                if *rot == 90 || *rot == 270 {
                     Some((h, w))
                 } else {
                     Some((w, h))
@@ -303,24 +289,17 @@ pub(crate) fn auto_detect_presets(state: &State, page_store: &gio::ListStore) {
     let mut sorted: Vec<((u32, u32), Vec<usize>)> = dim_groups.into_iter().collect();
     sorted.sort_by_key(|(_, idxs)| -(idxs.len() as i64));
 
-    for ((w, h), indices) in &sorted {
-        let pi = project.crop_presets.len();
-        project.crop_presets.push(CropPreset {
+    let base = project.crop_presets.len();
+    for (pi, ((w, h), indices)) in (base..).zip(sorted.iter()) {
+        (callbacks.on_add_crop_preset)(CropPreset {
             name: format!("Preset {}", pi + 1),
             w: *w,
             h: *h,
             locked: false,
         });
         for &idx in indices {
-            if let Some(page) = project.pages.get_mut(idx) {
-                page.crop_preset = Some(pi);
-                page.crop = Some(CropBox {
-                    x: 0,
-                    y: 0,
-                    w: *w,
-                    h: *h,
-                });
-            }
+            (callbacks.on_set_crop_preset)(idx, Some(pi));
+            (callbacks.on_set_crop)(idx, Some(CropBox { x: 0, y: 0, w: *w, h: *h }));
         }
     }
 }

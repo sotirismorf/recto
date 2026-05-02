@@ -1,4 +1,4 @@
-use std::cell::{Ref, RefCell, RefMut};
+use std::cell::{Ref, RefCell};
 
 use crate::command::event::AppEvent;
 use crate::command::Command;
@@ -27,7 +27,7 @@ pub struct AppState {
     project: RefCell<Project>,
     undo_stack: RefCell<Vec<Project>>,
     redo_stack: RefCell<Vec<Project>>,
-    event_tx: async_channel::Sender<AppEvent>,
+    event_txs: RefCell<Vec<async_channel::Sender<AppEvent>>>,
 }
 
 impl AppState {
@@ -38,7 +38,7 @@ impl AppState {
                 project: RefCell::new(project),
                 undo_stack: RefCell::new(Vec::with_capacity(MAX_UNDO)),
                 redo_stack: RefCell::new(Vec::new()),
-                event_tx: tx,
+                event_txs: RefCell::new(vec![tx]),
             },
             rx,
         )
@@ -49,11 +49,6 @@ impl AppState {
         self.project.borrow()
     }
 
-    /// Mutable access (panics if already borrowed).
-    pub fn project_mut(&self) -> RefMut<'_, Project> {
-        self.project.borrow_mut()
-    }
-
     /// Apply a command to the project and emit resulting events.
     /// Pushes the current state to the undo stack before mutating.
     pub fn dispatch(&self, cmd: Command) {
@@ -61,7 +56,7 @@ impl AppState {
         self.redo_stack.borrow_mut().clear();
         let events = self.apply(&cmd);
         for event in events {
-            let _ = self.event_tx.try_send(event);
+            self.emit(event);
         }
     }
 
@@ -70,7 +65,7 @@ impl AppState {
     pub fn dispatch_without_undo(&self, cmd: Command) {
         let events = self.apply(&cmd);
         for event in events {
-            let _ = self.event_tx.try_send(event);
+            self.emit(event);
         }
     }
 
@@ -80,14 +75,14 @@ impl AppState {
         self.push_undo();
         self.redo_stack.borrow_mut().clear();
         *self.project.borrow_mut() = project;
-        let _ = self.event_tx.try_send(AppEvent::ProjectLoaded);
+        self.emit(AppEvent::ProjectLoaded);
     }
 
     pub fn clear(&self) {
         self.push_undo();
         self.redo_stack.borrow_mut().clear();
         *self.project.borrow_mut() = Project::default();
-        let _ = self.event_tx.try_send(AppEvent::ProjectCleared);
+        self.emit(AppEvent::ProjectCleared);
     }
 
     /// Undo the last [`dispatch`] / [`load_project`] / [`clear`].
@@ -105,7 +100,7 @@ impl AppState {
         redo.push(current);
         drop(redo);
         *self.project.borrow_mut() = snapshot;
-        let _ = self.event_tx.try_send(AppEvent::ProjectChanged);
+        self.emit(AppEvent::ProjectChanged);
         true
     }
 
@@ -120,7 +115,7 @@ impl AppState {
             .borrow_mut()
             .push(self.project.borrow().clone());
         *self.project.borrow_mut() = snapshot;
-        let _ = self.event_tx.try_send(AppEvent::ProjectChanged);
+        self.emit(AppEvent::ProjectChanged);
         true
     }
 
@@ -132,9 +127,18 @@ impl AppState {
         !self.redo_stack.borrow().is_empty()
     }
 
-    /// Return a clone of the event sender for creating additional subscribers.
-    pub fn event_sender(&self) -> async_channel::Sender<AppEvent> {
-        self.event_tx.clone()
+    /// Create a new event subscriber. Events are cloned to every subscriber.
+    pub fn subscribe(&self) -> async_channel::Receiver<AppEvent> {
+        let (tx, rx) = async_channel::unbounded();
+        self.event_txs.borrow_mut().push(tx);
+        rx
+    }
+
+    fn emit(&self, event: AppEvent) {
+        let txs = self.event_txs.borrow();
+        for tx in txs.iter() {
+            let _ = tx.try_send(event.clone());
+        }
     }
 
     fn push_undo(&self) {
@@ -244,8 +248,49 @@ impl AppState {
             }
 
             Command::RemoveCropPreset(index) => {
-                if *index < p.crop_presets.len() {
-                    p.crop_presets.remove(*index);
+                if *index >= p.crop_presets.len() {
+                    return vec![];
+                }
+                p.crop_presets.remove(*index);
+                for page in p.pages.iter_mut() {
+                    match page.crop_preset {
+                        Some(pi) if pi == *index => {
+                            page.crop_preset = None;
+                            page.crop = None;
+                        }
+                        Some(pi) if pi > *index => page.crop_preset = Some(pi - 1),
+                        _ => {}
+                    }
+                }
+                for (i, preset) in p.crop_presets.iter_mut().enumerate() {
+                    preset.name = format!("Preset {}", i + 1);
+                }
+                vec![AppEvent::PresetsChanged]
+            }
+
+            Command::SetCropPresetLocked { index, locked } => {
+                if let Some(preset) = p.crop_presets.get_mut(*index) {
+                    preset.locked = *locked;
+                }
+                vec![AppEvent::PresetsChanged]
+            }
+
+            Command::SetCropPresetSize { index, w, h } => {
+                let Some(preset) = p.crop_presets.get_mut(*index) else {
+                    return vec![];
+                };
+                if preset.locked {
+                    return vec![];
+                }
+                preset.w = *w;
+                preset.h = *h;
+                for page in p.pages.iter_mut() {
+                    if page.crop_preset == Some(*index) {
+                        if let Some(c) = &mut page.crop {
+                            c.w = *w;
+                            c.h = *h;
+                        }
+                    }
                 }
                 vec![AppEvent::PresetsChanged]
             }

@@ -494,35 +494,31 @@ impl CropPicker {
     }
 
     fn sync_preset_from_drag(&self) {
-        let (state, index, w, h) = {
+        let (w, h, pi) = {
             let s = self.state.borrow();
-            let Some((state, index)) = s.binding.clone() else {
+            let Some((state, index)) = s.binding.as_ref() else {
                 return;
             };
             let Some(rect) = s.crop else { return };
             let cb = CropBox::from(rect);
-            (state, index, cb.w, cb.h)
+            let project = state.project();
+            let Some(pi) = project.pages.get(*index).and_then(|p| p.crop_preset) else {
+                return;
+            };
+            (cb.w, cb.h, pi)
         };
-        let mut project = state.project_mut();
-        let Some(pi) = project.pages.get(index).and_then(|p| p.crop_preset) else {
-            return;
-        };
-        let Some(preset) = project.crop_presets.get_mut(pi) else {
-            return;
-        };
-        if preset.locked {
-            return;
-        }
-        preset.w = w;
-        preset.h = h;
-        for page in project.pages.iter_mut() {
-            if page.crop_preset == Some(pi) {
-                if let Some(c) = &mut page.crop {
-                    c.w = w;
-                    c.h = h;
-                }
-            }
-        }
+        let state = self
+            .state
+            .borrow()
+            .binding
+            .clone()
+            .map(|(s, _)| s);
+        let Some(state) = state else { return };
+        state.dispatch(Command::SetCropPresetSize {
+            index: pi,
+            w,
+            h,
+        });
     }
 
     fn draw_overlay(&self, cr: &gtk::cairo::Context) {

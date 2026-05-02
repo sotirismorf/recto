@@ -1,24 +1,56 @@
-use std::cell::Cell;
 use std::path::PathBuf;
-use std::rc::Rc;
 
 use gtk::prelude::*;
 use gtk::{gdk_pixbuf, glib};
+use image::DynamicImage;
 
-use crate::app::State;
-use recto_core::CropBox;
+use crate::latest::RequestDedup;
+use recto_core::{Brightness, Contrast, CropBox, Project};
+
+pub(crate) fn pixbuf_to_dynamic_image(pb: &gdk_pixbuf::Pixbuf) -> DynamicImage {
+    let w = pb.width() as u32;
+    let h = pb.height() as u32;
+    let stride = pb.rowstride() as usize;
+    let src = pb.read_pixel_bytes();
+    let channels = if pb.has_alpha() { 4 } else { 3 };
+    let mut pixels = Vec::with_capacity(w as usize * h as usize * 3);
+    for row in 0..h {
+        for col in 0..w {
+            let si = row as usize * stride + col as usize * channels;
+            pixels.push(src[si]);
+            pixels.push(src[si + 1]);
+            pixels.push(src[si + 2]);
+        }
+    }
+    DynamicImage::ImageRgb8(image::RgbImage::from_raw(w, h, pixels).expect("valid rgb image"))
+}
+
+pub(crate) fn dynamic_image_to_pixbuf(img: &DynamicImage) -> gdk_pixbuf::Pixbuf {
+    let rgb = img.as_rgb8().expect("rgb8 image");
+    let (w, h) = rgb.dimensions();
+    let stride = w as usize * 3;
+    let data = rgb.as_raw().clone();
+    let bytes = glib::Bytes::from(data.as_slice());
+    gdk_pixbuf::Pixbuf::from_bytes(
+        &bytes,
+        gdk_pixbuf::Colorspace::Rgb,
+        false,
+        8,
+        w as i32,
+        h as i32,
+        stride as i32,
+    )
+}
 
 pub(crate) struct ColorReq {
-    id: u64,
     path: PathBuf,
     rotation: u32,
     crop: Option<CropBox>,
-    brightness: f32,
-    contrast: f32,
+    brightness: Brightness,
+    contrast: Contrast,
 }
 
 pub(crate) struct ColorResult {
-    pub(crate) id: u64,
     pub(crate) bytes: glib::Bytes,
     pub(crate) width: i32,
     pub(crate) height: i32,
@@ -27,35 +59,28 @@ pub(crate) struct ColorResult {
 }
 
 pub(crate) fn send_preview_req(
-    state: &State,
+    project: &Project,
     selection: &gtk::MultiSelection,
-    req_id: &Rc<Cell<u64>>,
-    tx: &async_channel::Sender<ColorReq>,
+    req: &RequestDedup<ColorReq>,
 ) {
     let bs = selection.selection();
     let first = match gtk::BitsetIter::init_first(&bs) {
         Some((_, idx)) => idx as usize,
         None => {
-            req_id.set(req_id.get().wrapping_add(1));
+            req.send_dummy();
             return;
         }
     };
-    let project = state.project();
     let Some(page) = project.pages.get(first) else {
         return;
     };
-    let id = req_id.get().wrapping_add(1);
-    req_id.set(id);
-    let req = ColorReq {
-        id,
+    req.send(ColorReq {
         path: page.path.clone(),
         rotation: page.rotation.as_degrees() as u32,
         crop: page.crop,
-        brightness: project.brightness.as_f32(),
-        contrast: project.contrast.as_f32(),
-    };
-    drop(project);
-    let _ = tx.send_blocking(req);
+        brightness: project.brightness,
+        contrast: project.contrast,
+    });
 }
 
 pub(crate) fn render_preview(req: &ColorReq) -> Option<ColorResult> {
@@ -73,9 +98,10 @@ pub(crate) fn render_preview(req: &ColorReq) -> Option<ColorResult> {
         None => pb,
     };
     let pb = scale_down(pb, 2048);
-    let pb = adjust_colors(pb, req.brightness, req.contrast);
+    let img = pixbuf_to_dynamic_image(&pb);
+    let img = recto_core::transform::color::apply(img, req.brightness, req.contrast);
+    let pb = dynamic_image_to_pixbuf(&img);
     Some(ColorResult {
-        id: req.id,
         bytes: pb.read_pixel_bytes(),
         width: pb.width(),
         height: pb.height(),
@@ -95,45 +121,6 @@ pub(crate) fn scale_down(pb: gdk_pixbuf::Pixbuf, max_px: i32) -> gdk_pixbuf::Pix
         .unwrap_or(pb)
 }
 
-pub(crate) fn adjust_colors(pb: gdk_pixbuf::Pixbuf, brightness: f32, contrast: f32) -> gdk_pixbuf::Pixbuf {
-    if brightness == 0.0 && contrast == 0.0 {
-        return pb;
-    }
-    let c = (contrast + 1.0_f32).max(0.0);
-    let b = (brightness * 128.0_f32).round() as i32;
-    let channels = if pb.has_alpha() { 4 } else { 3 } as usize;
-    let w = pb.width() as usize;
-    let h = pb.height() as usize;
-    let src_stride = pb.rowstride() as usize;
-    let src_bytes = pb.read_pixel_bytes();
-    let src = src_bytes.as_ref();
-    let dst_stride = w * channels;
-    let mut dst = vec![0u8; h * dst_stride];
-    for row in 0..h {
-        for col in 0..w {
-            let si = row * src_stride + col * channels;
-            let di = row * dst_stride + col * channels;
-            for ch in 0..3_usize {
-                let v = ((src[si + ch] as f32 - 128.0) * c + 128.0).round() as i32 + b;
-                dst[di + ch] = v.clamp(0, 255) as u8;
-            }
-            if channels == 4 {
-                dst[di + 3] = src[si + 3];
-            }
-        }
-    }
-    let bytes = glib::Bytes::from(dst.as_slice());
-    gdk_pixbuf::Pixbuf::from_bytes(
-        &bytes,
-        pb.colorspace(),
-        pb.has_alpha(),
-        pb.bits_per_sample(),
-        pb.width(),
-        pb.height(),
-        dst_stride as i32,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,9 +134,11 @@ mod tests {
     }
 
     #[test]
-    fn adjust_colors_identity() {
+    fn pixbuf_to_image_roundtrip() {
         let pb = gdk_pixbuf::Pixbuf::new(gdk_pixbuf::Colorspace::Rgb, false, 8, 10, 10).unwrap();
-        let result = adjust_colors(pb, 0.0, 0.0);
-        assert_eq!(result.width(), 10);
+        let img = pixbuf_to_dynamic_image(&pb);
+        let pb2 = dynamic_image_to_pixbuf(&img);
+        assert_eq!(pb2.width(), 10);
+        assert_eq!(pb2.height(), 10);
     }
 }

@@ -24,7 +24,7 @@ mod imp {
 
     #[glib::object_subclass]
     impl ObjectSubclass for PageItem {
-        const NAME: &'static str = "PageCutterPageItem";
+        const NAME: &'static str = "RectoPageItem";
         type Type = super::PageItem;
     }
 

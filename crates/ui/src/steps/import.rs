@@ -21,7 +21,7 @@ fn exif_corrected_dims(file_dims: (u32, u32), thumb_w: i32, thumb_h: i32) -> (u3
 use super::page_item::PageItem;
 use crate::app::State;
 use crate::widgets::zoom_pan::{ZoomPanConfig, ZoomPanController};
-use pagecutter_core::project::Page;
+use recto_core::project::Page;
 
 struct ThumbData {
     bytes: glib::Bytes,
@@ -251,7 +251,7 @@ use rayon::prelude::*;
         #[weak] spinner,
         #[strong] pending_tasks,
         #[strong] tx,
-        move |project: pagecutter_core::project::Project| {
+        move |project: recto_core::project::Project| {
             store.remove_all();
             let pages_info: Vec<(usize, PathBuf, u32)> = project
                 .pages
@@ -310,7 +310,7 @@ use rayon::prelude::*;
                 .modal(true)
                 .build();
             let filter = gtk::FileFilter::new();
-            filter.set_name(Some("pagecutter project (*.pcut)"));
+            filter.set_name(Some("Recto project (*.pcut)"));
             filter.add_pattern("*.pcut");
             let filters = gio::ListStore::new::<gtk::FileFilter>();
             filters.append(&filter);
@@ -324,7 +324,7 @@ use rayon::prelude::*;
                     move |result| {
                         let Ok(file) = result else { return };
                         let Some(path) = file.path() else { return };
-                        match pagecutter_core::project::load_project(&path) {
+                        match recto_core::project::load_project(&path) {
                             Ok(project) => start_loading_project(project),
                             Err(e) => tracing::error!("open project: {e}"),
                         }

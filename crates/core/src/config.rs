@@ -23,7 +23,7 @@ pub struct PdfMeta {
 }
 
 fn default_creator() -> String {
-    "pagecutter".into()
+    "Recto".into()
 }
 
 fn default_dpi() -> f64 {
@@ -44,7 +44,7 @@ impl Default for PdfMeta {
 }
 
 fn pdf_meta_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("pagecutter").join("pdf_meta.json"))
+    dirs::config_dir().map(|d| d.join("recto").join("pdf_meta.json"))
 }
 
 /// Load persisted PDF metadata, falling back to [`PdfMeta::default`] if the file

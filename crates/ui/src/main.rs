@@ -7,7 +7,7 @@ use adw::prelude::*;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(name = "pagecutter", version)]
+#[command(name = "recto", version)]
 struct Cli {
     #[arg(long)]
     project: Option<std::path::PathBuf>,
@@ -32,7 +32,7 @@ fn main() -> glib::ExitCode {
     }
 
     let app = adw::Application::builder()
-        .application_id("io.github.sotirismorf.PageCutter")
+        .application_id("io.github.sotirismorf.Recto")
         .build();
     app.connect_activate(window::build);
     app.run()

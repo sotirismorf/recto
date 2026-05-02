@@ -9,7 +9,7 @@ use super::page_item::PageItem;
 use crate::app::State;
 use crate::widgets::preview_canvas::PreviewCanvas;
 use crate::widgets::zoom_pan::{ZoomPanConfig, ZoomPanController};
-use pagecutter_core::project::CropBox;
+use recto_core::project::CropBox;
 
 struct ColorReq {
     id: u64,

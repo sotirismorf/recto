@@ -1,5 +1,5 @@
 use gtk::gio;
-use pagecutter_core::project::Project;
+use recto_core::project::Project;
 use std::cell::RefCell;
 use std::rc::Rc;
 

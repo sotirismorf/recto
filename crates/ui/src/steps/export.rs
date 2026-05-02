@@ -5,8 +5,8 @@ use gtk::prelude::*;
 use gtk::{gio, glib};
 
 use crate::app::State;
-use pagecutter_core::config::{load_pdf_meta, save_pdf_meta, PdfMeta};
-use pagecutter_core::project::ExportSettings;
+use recto_core::config::{load_pdf_meta, save_pdf_meta, PdfMeta};
+use recto_core::project::ExportSettings;
 
 enum ExportMsg {
     Progress(usize, usize),
@@ -16,7 +16,7 @@ enum ExportMsg {
 pub fn build(state: State) -> gtk::Widget {
     let (tx, rx) = async_channel::unbounded::<ExportMsg>();
 
-    // PDF metadata — loaded from ~/.config/pagecutter/pdf_meta.json once.
+    // PDF metadata — loaded from ~/.config/recto/pdf_meta.json once.
     let pdf_meta: Rc<RefCell<PdfMeta>> = Rc::new(RefCell::new(load_pdf_meta()));
 
     // --- Output directory row -----------------------------------------------
@@ -263,7 +263,7 @@ pub fn build(state: State) -> gtk::Widget {
                 .modal(true)
                 .build();
             let filter = gtk::FileFilter::new();
-            filter.set_name(Some("pagecutter project (*.pcut)"));
+            filter.set_name(Some("Recto project (*.pcut)"));
             filter.add_pattern("*.pcut");
             let filters = gio::ListStore::new::<gtk::FileFilter>();
             filters.append(&filter);
@@ -277,7 +277,7 @@ pub fn build(state: State) -> gtk::Widget {
                     path = path.with_extension("pcut");
                 }
                 let project = state.borrow().clone();
-                if let Err(e) = pagecutter_core::project::save_project(&project, &path) {
+                if let Err(e) = recto_core::project::save_project(&project, &path) {
                     tracing::error!("save project: {e}");
                 }
             });
@@ -339,7 +339,7 @@ pub fn build(state: State) -> gtk::Widget {
                     project.output_dir.join(format!("{}.pdf", project.prefix));
                 std::thread::spawn(move || {
                     let total = project.pages.len();
-                    let result = pagecutter_core::pipeline::export_to_pdf(
+                    let result = recto_core::pipeline::export_to_pdf(
                         &project,
                         &out_path,
                         &meta,
@@ -364,7 +364,7 @@ pub fn build(state: State) -> gtk::Widget {
                 std::thread::spawn(move || {
                     let total = project.pages.len();
                     let results =
-                        pagecutter_core::pipeline::run_batch(&project, |done, _| {
+                        recto_core::pipeline::run_batch(&project, |done, _| {
                             let _ = tx.send_blocking(ExportMsg::Progress(done, total));
                         });
                     let lines: Vec<(bool, String)> = results

@@ -1,4 +1,4 @@
-# clippy.toml — custom lint configuration for PageCutter2
+# clippy.toml — custom lint configuration for Recto
 
 # Disallow certain patterns project-wide
 disallowed-methods = []

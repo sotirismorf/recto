@@ -21,8 +21,8 @@ use super::page_item::PageItem;
 use crate::app::State;
 use crate::widgets::preview_canvas::PreviewCanvas;
 use crate::widgets::zoom_pan::{ZoomPanConfig, ZoomPanController};
-use pagecutter_core::geometry::Rect;
-use pagecutter_core::project::{CropBox, CropPreset};
+use recto_core::geometry::Rect;
+use recto_core::project::{CropBox, CropPreset};
 
 // --- Tunables -------------------------------------------------------------
 

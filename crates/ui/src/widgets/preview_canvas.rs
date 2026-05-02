@@ -18,7 +18,7 @@ mod imp {
 
     #[glib::object_subclass]
     impl ObjectSubclass for PreviewCanvas {
-        const NAME: &'static str = "PagecutterPreviewCanvas";
+        const NAME: &'static str = "RectoPreviewCanvas";
         type Type = super::PreviewCanvas;
         type ParentType = gtk::Widget;
     }

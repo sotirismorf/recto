@@ -3,7 +3,7 @@ use thiserror::Error;
 /// Convenience alias for the crate's error type.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// All errors emitted by `pagecutter-core`.
+/// All errors emitted by `recto-core`.
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum Error {

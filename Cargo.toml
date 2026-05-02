@@ -5,8 +5,9 @@ members = ["crates/core", "crates/ui"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "GPL-3.0-or-later"
 authors = ["Sotiris Morfakidis"]
+description = "Recto — The powerful post-processor for book scanning"
 
 [workspace.dependencies]
 anyhow = "1"

@@ -135,7 +135,7 @@ where
     {
         let info_ref = alloc.bump();
         let mut info = pdf.document_info(info_ref);
-        info.producer(TextStr("pagecutter"));
+        info.producer(TextStr("Recto"));
         if !meta.creator.is_empty() {
             info.creator(TextStr(&meta.creator));
         }

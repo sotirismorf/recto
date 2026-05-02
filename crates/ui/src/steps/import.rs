@@ -19,7 +19,7 @@ pub(crate) fn exif_corrected_dims(file_dims: (u32, u32), thumb_w: i32, thumb_h: 
 }
 
 use super::page_item::PageItem;
-use crate::app::State;
+use crate::app::{MarkDirty, State};
 use crate::widgets::zoom_pan::{ZoomPanConfig, ZoomPanController};
 use recto_core::project::Project;
 
@@ -50,6 +50,7 @@ pub fn build(
     env: LoadEnv,
     load_images: Rc<dyn Fn(Vec<PathBuf>)>,
     load_project: Rc<dyn Fn(Project)>,
+    mark_dirty: MarkDirty,
 ) -> gtk::Widget {
     let LoadEnv { spinner, count } = env;
     let store = page_store;
@@ -458,9 +459,11 @@ pub fn build(
 
         #[strong] preview_req_id,
         #[strong] tx_prev,
+        #[strong] mark_dirty,
         move |_| {
             rotate_selected(&selection, &store, &state, -90);
             update_preview(&selection, &preview, &preview_req_id, &tx_prev);
+            mark_dirty();
         }
     ));
     rotate_cw.connect_clicked(glib::clone!(
@@ -471,9 +474,11 @@ pub fn build(
 
         #[strong] preview_req_id,
         #[strong] tx_prev,
+        #[strong] mark_dirty,
         move |_| {
             rotate_selected(&selection, &store, &state, 90);
             update_preview(&selection, &preview, &preview_req_id, &tx_prev);
+            mark_dirty();
         }
     ));
     rotate_180.connect_clicked(glib::clone!(
@@ -484,9 +489,11 @@ pub fn build(
 
         #[strong] preview_req_id,
         #[strong] tx_prev,
+        #[strong] mark_dirty,
         move |_| {
             rotate_selected(&selection, &store, &state, 180);
             update_preview(&selection, &preview, &preview_req_id, &tx_prev);
+            mark_dirty();
         }
     ));
 
@@ -499,9 +506,11 @@ pub fn build(
 
         #[strong] preview_req_id,
         #[strong] tx_prev,
+        #[strong] mark_dirty,
         move |_| {
             let mut positions = selected_positions(&selection);
             positions.sort_unstable_by(|a, b| b.cmp(a));
+            let removed = !positions.is_empty();
             for pos in positions {
                 store.remove(pos);
                 let mut p = state.borrow_mut();
@@ -511,6 +520,9 @@ pub fn build(
             }
             update_count(&count, &state);
             update_preview(&selection, &preview, &preview_req_id, &tx_prev);
+            if removed {
+                mark_dirty();
+            }
         }
     ));
 

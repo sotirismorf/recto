@@ -18,7 +18,7 @@ use gtk::prelude::*;
 use gtk::{gdk, gdk_pixbuf, gio, glib};
 
 use super::page_item::PageItem;
-use crate::app::State;
+use crate::app::{MarkDirty, State};
 use crate::widgets::preview_canvas::PreviewCanvas;
 use crate::widgets::zoom_pan::{ZoomPanConfig, ZoomPanController};
 use recto_core::geometry::Rect;
@@ -615,7 +615,12 @@ impl CropPicker {
 
 // --- build() — entry point ------------------------------------------------
 
-pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedSync) -> gtk::Widget {
+pub fn build(
+    state: State,
+    page_store: gio::ListStore,
+    paned_sync: super::PanedSync,
+    mark_dirty: MarkDirty,
+) -> gtk::Widget {
     let current_index: Rc<Cell<i32>> = Rc::new(Cell::new(-1));
     let initialised: Rc<Cell<bool>> = Rc::new(Cell::new(false));
 
@@ -671,23 +676,24 @@ pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedS
             let card = gtk::Box::builder()
                 .orientation(gtk::Orientation::Vertical)
                 .spacing(4)
-                .margin_top(8)
-                .margin_bottom(8)
-                .margin_start(8)
-                .margin_end(8)
                 .halign(gtk::Align::Center)
-                .hexpand(false)
-                .build();
-            let overlay = gtk::Overlay::builder()
-                .width_request(150)
-                .height_request(150)
+                .valign(gtk::Align::Start)
                 .hexpand(false)
                 .vexpand(false)
                 .build();
-            let pic = gtk::Picture::builder()
-                .content_fit(gtk::ContentFit::Contain)
-                .hexpand(true)
-                .vexpand(true)
+            let overlay = gtk::Overlay::builder()
+                .halign(gtk::Align::Center)
+                .valign(gtk::Align::Center)
+                .hexpand(false)
+                .vexpand(false)
+                .build();
+            // gtk::Image with pixel_size clamps its natural size to a fixed
+            // square — unlike gtk::Picture, whose natural size grows with the
+            // paintable. That keeps cells stable and matches the import grid.
+            let pic = gtk::Image::builder()
+                .pixel_size(150)
+                .halign(gtk::Align::Center)
+                .valign(gtk::Align::Center)
                 .build();
             overlay.set_child(Some(&pic));
             let da = gtk::DrawingArea::builder()
@@ -725,7 +731,7 @@ pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedS
                 .expect("ListStore item must be PageItem");
             let card: gtk::Box = item.child().and_downcast().expect("child must be gtk::Box");
             let overlay: gtk::Overlay = card.first_child().and_downcast().expect("first child must be gtk::Overlay");
-            let pic: gtk::Picture = overlay.first_child().and_downcast().expect("overlay child must be gtk::Picture");
+            let pic: gtk::Image = overlay.first_child().and_downcast().expect("overlay child must be gtk::Image");
             let lbl: gtk::Label = overlay.next_sibling().and_downcast().expect("next sibling must be gtk::Label");
 
             let b1 = page
@@ -890,6 +896,7 @@ pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedS
         let sel_indices = si.clone();
         let ov = overlays.clone();
         let store = ps.clone();
+        let mark_dirty = mark_dirty.clone();
         move |sel, _, _| {
             let bitset = sel.selection();
             let n = store.n_items();
@@ -905,13 +912,13 @@ pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedS
             if first == u32::MAX {
                 ci.set(-1);
                 picker.clear();
-                refresh_preset_chips(&chips, &state, ci.clone(), &p, &ov, &sel_indices);
+                refresh_preset_chips(&chips, &state, ci.clone(), &p, &ov, &sel_indices, &mark_dirty);
                 update_status_label(&sl, &state, -1);
             } else {
                 let idx = first as i32;
                 ci.set(idx);
                 picker.bind(state.clone(), first as usize);
-                refresh_preset_chips(&chips, &state, ci.clone(), &p, &ov, &sel_indices);
+                refresh_preset_chips(&chips, &state, ci.clone(), &p, &ov, &sel_indices, &mark_dirty);
                 update_status_label(&sl, &state, idx);
             }
         }
@@ -927,13 +934,15 @@ pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedS
         let p = picker_rc.clone();
         let ov = overlays.clone();
         let sel_indices = si.clone();
+        let mark_dirty = mark_dirty.clone();
         move || {
             let idx = ci.get();
             if idx < 0 {
                 return;
             }
-            refresh_preset_chips(&chips, &state, ci.clone(), &p, &ov, &sel_indices);
+            refresh_preset_chips(&chips, &state, ci.clone(), &p, &ov, &sel_indices, &mark_dirty);
             update_status_label(&sl, &state, idx);
+            mark_dirty();
         }
     });
 
@@ -947,6 +956,7 @@ pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedS
         let ci = current_index.clone();
         let p = picker_rc.clone();
         let ov = overlays.clone();
+        let mark_dirty = mark_dirty.clone();
         move |_| {
             let idx = ci.get();
             if idx < 0 {
@@ -978,8 +988,9 @@ pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedS
             drop(project);
 
             picker.set_crop(Some(Rect::new(0.0, 0.0, w as f64, h as f64)));
-            refresh_preset_chips(&chips, &state, ci.clone(), &p, &ov, &selected_indices);
+            refresh_preset_chips(&chips, &state, ci.clone(), &p, &ov, &selected_indices, &mark_dirty);
             update_status_label(&sl, &state, idx);
+            mark_dirty();
         }
     });
 
@@ -995,13 +1006,14 @@ pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedS
         let ci = current_index.clone();
         let ov = overlays.clone();
         let sel_indices = si.clone();
+        let mark_dirty = mark_dirty.clone();
         move |_| {
             if initialised.get() {
                 return;
             }
             initialised.set(true);
             auto_detect_presets(&state, &store);
-            refresh_preset_chips(&chips, &state, ci.clone(), &p, &ov, &sel_indices);
+            refresh_preset_chips(&chips, &state, ci.clone(), &p, &ov, &sel_indices, &mark_dirty);
             if store.n_items() > 0 {
                 selection.select_item(0, true);
             }
@@ -1022,6 +1034,7 @@ fn refresh_preset_chips(
     picker: &Rc<CropPicker>,
     overlays: &Rc<RefCell<Vec<glib::WeakRef<gtk::DrawingArea>>>>,
     selected_indices: &Rc<RefCell<Vec<usize>>>,
+    mark_dirty: &MarkDirty,
 ) {
     // Remove all children.
     while let Some(child) = chip_box.first_child() {
@@ -1083,6 +1096,7 @@ fn refresh_preset_chips(
             let chips_weak = chip_box.downgrade();
             let sel = selected_indices.clone();
             let ov = overlays.clone();
+            let mark_dirty = mark_dirty.clone();
             let pi = i;
             let pw = preset.w;
             let ph = preset.h;
@@ -1118,7 +1132,8 @@ fn refresh_preset_chips(
                 if let Some(r) = new_first {
                     picker.set_crop(Some(r));
                 }
-                refresh_preset_chips(&chips, &state, ci.clone(), &picker, &ov, &sel);
+                refresh_preset_chips(&chips, &state, ci.clone(), &picker, &ov, &sel, &mark_dirty);
+                mark_dirty();
             });
         }
 
@@ -1146,6 +1161,7 @@ fn refresh_preset_chips(
             let picker_weak = Rc::downgrade(picker);
             let ov = overlays.clone();
             let sel = selected_indices.clone();
+            let mark_dirty = mark_dirty.clone();
             let pi = i;
             lock_btn.connect_toggled(move |btn| {
                 let locked = btn.is_active();
@@ -1162,8 +1178,9 @@ fn refresh_preset_chips(
                 }
                 drop(project);
                 if let (Some(picker), Some(chips)) = (picker_weak.upgrade(), chips_weak.upgrade()) {
-                    refresh_preset_chips(&chips, &state, ci.clone(), &picker, &ov, &sel);
+                    refresh_preset_chips(&chips, &state, ci.clone(), &picker, &ov, &sel, &mark_dirty);
                 }
+                mark_dirty();
             });
         }
 
@@ -1186,6 +1203,7 @@ fn refresh_preset_chips(
                 let picker_weak = Rc::downgrade(picker);
                 let ov = overlays.clone();
                 let sel = selected_indices.clone();
+                let mark_dirty = mark_dirty.clone();
                 let pi = i;
                 close_btn.connect_clicked(move |_| {
                     let Some(picker) = picker_weak.upgrade() else { return };
@@ -1204,7 +1222,8 @@ fn refresh_preset_chips(
                             }
                         }
                     }
-                    refresh_preset_chips(&chips, &state, ci.clone(), &picker, &ov, &sel);
+                    refresh_preset_chips(&chips, &state, ci.clone(), &picker, &ov, &sel, &mark_dirty);
+                    mark_dirty();
                 });
             }
 

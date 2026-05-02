@@ -4,7 +4,7 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk::{gio, glib};
 
-use crate::app::State;
+use crate::app::{MarkDirty, State};
 use recto_core::config::{load_pdf_meta, save_pdf_meta, PdfMeta};
 use recto_core::project::ExportSettings;
 
@@ -13,7 +13,7 @@ enum ExportMsg {
     Done(Vec<(bool, String)>),
 }
 
-pub fn build(state: State) -> gtk::Widget {
+pub fn build(state: State, mark_dirty: MarkDirty) -> gtk::Widget {
     let (tx, rx) = async_channel::unbounded::<ExportMsg>();
 
     // PDF metadata — loaded from ~/.config/recto/pdf_meta.json once.
@@ -154,13 +154,6 @@ pub fn build(state: State) -> gtk::Widget {
         .halign(gtk::Align::Center)
         .build();
 
-    let save_project_btn = gtk::Button::builder()
-        .label("Save Project…")
-        .icon_name("document-save-symbolic")
-        .tooltip_text("Save a .pcut project file you can reopen later")
-        .halign(gtk::Align::Center)
-        .build();
-
     let progress = gtk::ProgressBar::builder()
         .show_text(true)
         .visible(false)
@@ -185,7 +178,6 @@ pub fn build(state: State) -> gtk::Widget {
         .halign(gtk::Align::Center)
         .build();
     btn_row.append(&export_btn);
-    btn_row.append(&save_project_btn);
 
     let action_box = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -210,6 +202,7 @@ pub fn build(state: State) -> gtk::Widget {
     dir_btn.connect_clicked({
         let state = state.clone();
         let dir_lbl = dir_lbl.clone();
+        let mark_dirty = mark_dirty.clone();
         move |btn| {
             let dialog = gtk::FileDialog::builder()
                 .title("Choose Output Directory")
@@ -218,14 +211,39 @@ pub fn build(state: State) -> gtk::Widget {
             let parent = btn.root().and_downcast::<gtk::Window>();
             let state = state.clone();
             let dir_lbl = dir_lbl.clone();
+            let mark_dirty = mark_dirty.clone();
             dialog.select_folder(parent.as_ref(), gio::Cancellable::NONE, move |res| {
                 let Ok(file) = res else { return };
                 let Some(path) = file.path() else { return };
                 dir_lbl.set_label(&path.display().to_string());
-                state.borrow_mut().output_dir = path;
+                let mut p = state.borrow_mut();
+                if p.output_dir != path {
+                    p.output_dir = path;
+                    drop(p);
+                    mark_dirty();
+                }
             });
         }
     });
+
+    prefix_entry.connect_changed({
+        let mark_dirty = mark_dirty.clone();
+        move |_| mark_dirty()
+    });
+    quality_scale.connect_value_changed({
+        let mark_dirty = mark_dirty.clone();
+        move |_| mark_dirty()
+    });
+    for btn in [&btn_jpeg, &btn_png, &btn_tiff, &btn_pdf] {
+        btn.connect_toggled({
+            let mark_dirty = mark_dirty.clone();
+            move |b| {
+                if b.is_active() {
+                    mark_dirty();
+                }
+            }
+        });
+    }
 
     // Show/hide quality and metadata rows based on active format.
     let update_rows_visibility = {
@@ -251,36 +269,6 @@ pub fn build(state: State) -> gtk::Widget {
         move |btn| {
             let parent = btn.root().and_downcast::<gtk::Window>();
             show_pdf_meta_dialog(parent, pdf_meta.clone());
-        }
-    });
-
-    // Save Project button.
-    save_project_btn.connect_clicked({
-        let state = state.clone();
-        move |btn| {
-            let dialog = gtk::FileDialog::builder()
-                .title("Save Project As")
-                .modal(true)
-                .build();
-            let filter = gtk::FileFilter::new();
-            filter.set_name(Some("Recto project (*.pcut)"));
-            filter.add_pattern("*.pcut");
-            let filters = gio::ListStore::new::<gtk::FileFilter>();
-            filters.append(&filter);
-            dialog.set_filters(Some(&filters));
-            let parent = btn.root().and_downcast::<gtk::Window>();
-            let state = state.clone();
-            dialog.save(parent.as_ref(), gio::Cancellable::NONE, move |result| {
-                let Ok(file) = result else { return };
-                let Some(mut path) = file.path() else { return };
-                if path.extension().is_none() {
-                    path = path.with_extension("pcut");
-                }
-                let project = state.borrow().clone();
-                if let Err(e) = recto_core::project::save_project(&project, &path) {
-                    tracing::error!("save project: {e}");
-                }
-            });
         }
     });
 

@@ -6,7 +6,7 @@ use gtk::prelude::*;
 use gtk::{gdk, gdk_pixbuf, gio, glib};
 
 use super::page_item::PageItem;
-use crate::app::State;
+use crate::app::{MarkDirty, State};
 use crate::widgets::preview_canvas::PreviewCanvas;
 use crate::widgets::zoom_pan::{ZoomPanConfig, ZoomPanController};
 use recto_core::project::CropBox;
@@ -29,7 +29,12 @@ struct ColorResult {
     has_alpha: bool,
 }
 
-pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedSync) -> gtk::Widget {
+pub fn build(
+    state: State,
+    page_store: gio::ListStore,
+    paned_sync: super::PanedSync,
+    mark_dirty: MarkDirty,
+) -> gtk::Widget {
     let req_id: Rc<Cell<u64>> = Rc::new(Cell::new(0));
     let (tx_req, rx_req) = async_channel::unbounded::<ColorReq>();
     let (tx_res, rx_res) = async_channel::unbounded::<ColorResult>();
@@ -114,19 +119,15 @@ pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedS
         let card = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(4)
-            .margin_top(8)
-            .margin_bottom(8)
-            .margin_start(8)
-            .margin_end(8)
             .halign(gtk::Align::Center)
-            .hexpand(false)
-            .build();
-        let pic = gtk::Picture::builder()
-            .content_fit(gtk::ContentFit::Contain)
-            .width_request(150)
-            .height_request(150)
+            .valign(gtk::Align::Start)
             .hexpand(false)
             .vexpand(false)
+            .build();
+        let pic = gtk::Image::builder()
+            .pixel_size(150)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
             .build();
         let lbl = gtk::Label::builder()
             .ellipsize(gtk::pango::EllipsizeMode::End)
@@ -143,7 +144,7 @@ pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedS
             .expect("SignalListItemFactory must provide gtk::ListItem");
         let page: PageItem = item.item().and_downcast().expect("item must be PageItem");
         let card: gtk::Box = item.child().and_downcast().expect("child must be Box");
-        let pic: gtk::Picture = card.first_child().and_downcast().expect("first child must be Picture");
+        let pic: gtk::Image = card.first_child().and_downcast().expect("first child must be Image");
         let lbl: gtk::Label = pic.next_sibling().and_downcast().expect("sibling must be Label");
         let b1 = page.bind_property("thumbnail", &pic, "paintable").sync_create().build();
         let b2 = page.bind_property("filename", &lbl, "label").sync_create().build();
@@ -238,8 +239,17 @@ pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedS
         let selection = selection.clone();
         let req_id = req_id.clone();
         let tx_req = tx_req.clone();
+        let mark_dirty = mark_dirty.clone();
         move |scale| {
-            state.borrow_mut().brightness = scale.value() as f32;
+            let v = scale.value() as f32;
+            let mut p = state.borrow_mut();
+            if p.brightness != v {
+                p.brightness = v;
+                drop(p);
+                mark_dirty();
+            } else {
+                drop(p);
+            }
             send_preview_req(&state, &selection, &req_id, &tx_req);
         }
     });
@@ -249,8 +259,17 @@ pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedS
         let selection = selection.clone();
         let req_id = req_id.clone();
         let tx_req = tx_req.clone();
+        let mark_dirty = mark_dirty.clone();
         move |scale| {
-            state.borrow_mut().contrast = scale.value() as f32;
+            let v = scale.value() as f32;
+            let mut p = state.borrow_mut();
+            if p.contrast != v {
+                p.contrast = v;
+                drop(p);
+                mark_dirty();
+            } else {
+                drop(p);
+            }
             send_preview_req(&state, &selection, &req_id, &tx_req);
         }
     });
@@ -259,11 +278,18 @@ pub fn build(state: State, page_store: gio::ListStore, paned_sync: super::PanedS
         let state = state.clone();
         let brightness_scale = brightness_scale.clone();
         let contrast_scale = contrast_scale.clone();
+        let mark_dirty = mark_dirty.clone();
         move |_| {
-            state.borrow_mut().brightness = 0.0;
-            state.borrow_mut().contrast = 0.0;
+            let mut p = state.borrow_mut();
+            let changed = p.brightness != 0.0 || p.contrast != 0.0;
+            p.brightness = 0.0;
+            p.contrast = 0.0;
+            drop(p);
             brightness_scale.set_value(0.0);
             contrast_scale.set_value(0.0);
+            if changed {
+                mark_dirty();
+            }
         }
     });
 

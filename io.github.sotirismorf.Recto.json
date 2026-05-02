@@ -37,7 +37,9 @@
                 "cargo build --release --offline",
                 "install -Dm755 target/release/recto /app/bin/recto",
                 "install -Dm644 io.github.sotirismorf.Recto.desktop /app/share/applications/io.github.sotirismorf.Recto.desktop",
-                "install -Dm644 crates/ui/src/logo.svg /app/share/icons/hicolor/scalable/apps/io.github.sotirismorf.Recto.svg"
+                "install -Dm644 crates/ui/src/logo.svg /app/share/icons/hicolor/scalable/apps/io.github.sotirismorf.Recto.svg",
+                "install -Dm644 data/io.github.sotirismorf.Recto.xml /app/share/mime/packages/io.github.sotirismorf.Recto.xml",
+                "update-mime-database /app/share/mime"
             ]
         }
     ]

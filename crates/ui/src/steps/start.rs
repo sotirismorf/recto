@@ -173,8 +173,8 @@ pub fn build(
                 .modal(true)
                 .build();
             let filter = gtk::FileFilter::new();
-            filter.set_name(Some("Recto project (*.pcut)"));
-            filter.add_pattern("*.pcut");
+            filter.set_name(Some("Recto project (*.recto)"));
+            filter.add_pattern("*.recto");
             let filters = gio::ListStore::new::<gtk::FileFilter>();
             filters.append(&filter);
             dialog.set_filters(Some(&filters));

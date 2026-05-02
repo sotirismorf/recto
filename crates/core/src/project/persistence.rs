@@ -140,7 +140,7 @@ mod tests {
             contrast: 10.0,
         };
 
-        let proj_path = tmp.path().join("test.pcut");
+        let proj_path = tmp.path().join("test.recto");
         save_project(&project, &proj_path).unwrap();
 
         let loaded = load_project(&proj_path).unwrap();
@@ -177,7 +177,7 @@ mod tests {
             "output_dir": "",
             "prefix": "p"
         });
-        let proj_path = tmp.path().join("future.pcut");
+        let proj_path = tmp.path().join("future.recto");
         std::fs::write(&proj_path, serde_json::to_string(&json).unwrap()).unwrap();
         let err = load_project(&proj_path).unwrap_err();
         assert!(matches!(
@@ -193,7 +193,7 @@ mod tests {
     fn version_defaults_to_1() {
         let tmp = tempfile::tempdir().unwrap();
         let json = r#"{"pages":[],"crop_presets":[],"export":{"format":"png"},"output_dir":"","prefix":"p"}"#;
-        let proj_path = tmp.path().join("old.pcut");
+        let proj_path = tmp.path().join("old.recto");
         std::fs::write(&proj_path, json).unwrap();
         let project = load_project(&proj_path).unwrap();
         assert_eq!(project.version, 1);

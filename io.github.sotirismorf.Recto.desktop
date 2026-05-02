@@ -6,4 +6,4 @@ Icon=io.github.sotirismorf.Recto
 Terminal=false
 Type=Application
 Categories=Graphics;Office;Viewer;
-MimeType=image/png;image/jpeg;image/tiff;image/webp;image/bmp;
+MimeType=application/x-recto-project;image/png;image/jpeg;image/tiff;image/webp;image/bmp;

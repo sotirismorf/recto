@@ -7,7 +7,7 @@ use std::rc::Rc;
 use crate::app::{new_state, new_store, MarkDirty, Session, State};
 use crate::steps;
 
-pub fn build(app: &adw::Application) {
+pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
     let state: State = new_state();
     let session = Session::new(state.clone());
     let page_store = new_store();
@@ -418,11 +418,11 @@ pub fn build(app: &adw::Application) {
                     dialog.set_initial_name(Some(&name.to_string_lossy()));
                 }
             } else {
-                dialog.set_initial_name(Some("project.pcut"));
+                dialog.set_initial_name(Some("project.recto"));
             }
             let filter = gtk::FileFilter::new();
-            filter.set_name(Some("Recto project (*.pcut)"));
-            filter.add_pattern("*.pcut");
+            filter.set_name(Some("Recto project (*.recto)"));
+            filter.add_pattern("*.recto");
             let filters = gio::ListStore::new::<gtk::FileFilter>();
             filters.append(&filter);
             dialog.set_filters(Some(&filters));
@@ -548,8 +548,8 @@ pub fn build(app: &adw::Application) {
                     .modal(true)
                     .build();
                 let filter = gtk::FileFilter::new();
-                filter.set_name(Some("Recto project (*.pcut)"));
-                filter.add_pattern("*.pcut");
+                filter.set_name(Some("Recto project (*.recto)"));
+                filter.add_pattern("*.recto");
                 let filters = gio::ListStore::new::<gtk::FileFilter>();
                 filters.append(&filter);
                 dialog.set_filters(Some(&filters));
@@ -601,4 +601,11 @@ pub fn build(app: &adw::Application) {
     }
 
     window.present();
+
+    if let Some(path) = project_path {
+        match recto_core::project::load_project(&path) {
+            Ok(project) => load_project(project),
+            Err(e) => tracing::error!("Failed to load project {:?}: {}", path, e),
+        }
+    }
 }

@@ -5,6 +5,9 @@ mod window;
 
 use adw::prelude::*;
 use clap::Parser;
+use gtk::gio;
+use std::cell::Cell;
+use std::rc::Rc;
 
 #[derive(Parser, Debug)]
 #[command(name = "recto", version)]
@@ -31,9 +34,30 @@ fn main() -> glib::ExitCode {
         return glib::ExitCode::SUCCESS;
     }
 
+    let project_path = Rc::new(Cell::new(cli.project));
+
     let app = adw::Application::builder()
         .application_id("io.github.sotirismorf.Recto")
+        .flags(gio::ApplicationFlags::HANDLES_OPEN)
         .build();
-    app.connect_activate(window::build);
+
+    app.connect_open(glib::clone!(
+        #[strong] project_path,
+        move |_app, files, _hint| {
+            if let Some(file) = files.first() {
+                if let Some(path) = file.path() {
+                    project_path.set(Some(path));
+                }
+            }
+        }
+    ));
+
+    app.connect_activate(glib::clone!(
+        #[strong] project_path,
+        move |app| {
+            window::build(app, project_path.take());
+        }
+    ));
+
     app.run()
 }

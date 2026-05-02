@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-recto-project">
+    <comment>Recto project</comment>
+    <comment xml:lang="en">Recto project</comment>
+    <glob pattern="*.recto"/>
+    <icon name="io.github.sotirismorf.Recto"/>
+  </mime-type>
+</mime-info>

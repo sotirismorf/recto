@@ -1,0 +1,44 @@
+{
+    "app-id": "io.github.sotirismorf.Recto",
+    "runtime": "org.gnome.Platform",
+    "runtime-version": "50",
+    "sdk": "org.gnome.Sdk",
+    "sdk-extensions": [
+        "org.freedesktop.Sdk.Extension.rust-stable"
+    ],
+    "command": "recto",
+    "finish-args": [
+        "--socket=wayland",
+        "--socket=fallback-x11",
+        "--share=ipc",
+        "--device=dri",
+        "--filesystem=home"
+    ],
+    "modules": [
+        {
+            "name": "recto",
+            "buildsystem": "simple",
+            "build-options": {
+                "append-path": "/usr/lib/sdk/rust-stable/bin",
+                "env": {
+                    "CARGO_HOME": "/run/build/recto/cargo"
+                }
+            },
+            "sources": [
+                {
+                    "type": "dir",
+                    "path": "."
+                },
+                "cargo-sources.json"
+            ],
+            "build-commands": [
+                "mkdir -p .cargo",
+                "cat > .cargo/config.toml <<'EOF'\n[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n[source.vendored-sources]\ndirectory = \"cargo/vendor\"\nEOF",
+                "cargo build --release --offline",
+                "install -Dm755 target/release/recto /app/bin/recto",
+                "install -Dm644 io.github.sotirismorf.Recto.desktop /app/share/applications/io.github.sotirismorf.Recto.desktop",
+                "install -Dm644 crates/ui/src/logo.svg /app/share/icons/hicolor/scalable/apps/io.github.sotirismorf.Recto.svg"
+            ]
+        }
+    ]
+}

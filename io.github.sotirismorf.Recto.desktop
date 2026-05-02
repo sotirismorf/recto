@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Recto
+Comment=The powerful book scanning post-processor
+Exec=recto %F
+Icon=io.github.sotirismorf.Recto
+Terminal=false
+Type=Application
+Categories=Graphics;Office;Viewer;
+MimeType=image/png;image/jpeg;image/tiff;image/webp;image/bmp;

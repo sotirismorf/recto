@@ -441,28 +441,32 @@ impl CropPicker {
             self.area.set_cursor(None);
             return;
         };
-        let s = self.state.borrow();
-        let rect = match s.crop {
-            Some(r) => r,
-            None => {
-                self.area.set_cursor(None);
-                return;
-            }
+        
+        let (rect, locked) = {
+            let s = self.state.borrow();
+            let rect = match s.crop {
+                Some(r) => r,
+                None => {
+                    self.area.set_cursor(None);
+                    return;
+                }
+            };
+            let locked = s
+                .binding
+                .as_ref()
+                .map(|(state, index)| {
+                    let p = state.project();
+                    p.pages
+                        .get(*index)
+                        .and_then(|pg| pg.crop_preset)
+                        .and_then(|pi| p.crop_presets.get(pi))
+                        .map(|pr| pr.locked)
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false);
+            (rect, locked)
         };
-        let locked = s
-            .binding
-            .as_ref()
-            .map(|(state, index)| {
-                let p = state.project();
-                p.pages
-                    .get(*index)
-                    .and_then(|pg| pg.crop_preset)
-                    .and_then(|pi| p.crop_presets.get(pi))
-                    .map(|pr| pr.locked)
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false);
-        drop(s);
+
         let (z, _, _) = self.canvas.transform();
         let h = if locked {
             if rect.contains(img_pos) {
@@ -484,17 +488,19 @@ impl CropPicker {
     }
 
     fn persist_crop(&self) {
-        let s = self.state.borrow();
-        let Some((state, index)) = s.binding.clone() else {
-            return;
+        let (state, index, crop) = {
+            let s = self.state.borrow();
+            let Some((state, index)) = s.binding.clone() else {
+                return;
+            };
+            let crop = s.crop.map(CropBox::from);
+            (state, index, crop)
         };
-        let crop = s.crop.map(CropBox::from);
-        drop(s);
         state.dispatch(Command::SetCrop { index, crop });
     }
 
     fn sync_preset_from_drag(&self) {
-        let (w, h, pi) = {
+        let (state, pi, w, h) = {
             let s = self.state.borrow();
             let Some((state, index)) = s.binding.as_ref() else {
                 return;
@@ -505,15 +511,9 @@ impl CropPicker {
             let Some(pi) = project.pages.get(*index).and_then(|p| p.crop_preset) else {
                 return;
             };
-            (cb.w, cb.h, pi)
+            (state.clone(), pi, cb.w, cb.h)
         };
-        let state = self
-            .state
-            .borrow()
-            .binding
-            .clone()
-            .map(|(s, _)| s);
-        let Some(state) = state else { return };
+
         state.dispatch(Command::SetCropPresetSize {
             index: pi,
             w,

@@ -24,7 +24,10 @@ use crate::widgets::page_item::PageItem;
 use crate::widgets::preset_chips::PresetCallbacks;
 use recto_core::{AppEvent, Command};
 
+use crate::views::workspace::crop::update_margin_spin;
 use css::{load_preset_css, load_sidebar_css};
+#[cfg(feature = "autodetect")]
+use crate::worker::JobQueue;
 use helpers::{
     make_mode_button, project_page_into_store, sync_page_metadata, update_arrange_preview,
 };
@@ -548,6 +551,8 @@ pub fn build(
         crop_sidebar.preset_chips,
         #[weak(rename_to = sl)]
         crop_sidebar.status_lbl,
+        #[strong]
+        crop_sidebar,
         #[weak(rename_to = rotate_ccw)]
         arrange_sidebar.rotate_ccw,
         #[weak(rename_to = rotate_cw)]
@@ -599,6 +604,7 @@ pub fn build(
                             );
                         }
                         sl.set_label("No page selected");
+                        update_margin_spin(&crop_sidebar, &state, &current_index);
                     } else {
                         current_index.set(Some(first as usize));
                         picker.bind(state.clone(), first as usize);
@@ -615,6 +621,7 @@ pub fn build(
                             );
                         }
                         crate::widgets::crop_overlay::update_status_label(&sl, &state, Some(first as usize));
+                        update_margin_spin(&crop_sidebar, &state, &current_index);
                     }
                 }
                 Mode::Color => {
@@ -637,6 +644,7 @@ pub fn build(
         let p = picker.clone();
         let ov = overlays.clone();
         let sel_indices = selected_indices.clone();
+        let crop_sidebar = crop_sidebar.clone();
         move || {
             let Some(idx) = ci.get() else {
                 return;
@@ -649,6 +657,7 @@ pub fn build(
             }
             crate::widgets::crop_overlay::update_status_label(&sl, &state, Some(idx));
             crate::widgets::crop_overlay::queue_all_overlays(&ov);
+            update_margin_spin(&crop_sidebar, &state, &ci);
         }
     });
 
@@ -704,6 +713,8 @@ pub fn build(
         #[weak(rename_to = sl)]
         crop_sidebar.status_lbl,
         #[strong]
+        crop_sidebar,
+        #[strong]
         overlays,
         #[strong]
         crop_initialised,
@@ -749,6 +760,7 @@ pub fn build(
                     );
                 }
                 sl.set_label("No page selected");
+                update_margin_spin(&crop_sidebar, &state, &current_index);
             } else {
                 current_index.set(Some(first as usize));
                 picker.bind(state.clone(), first as usize);
@@ -765,6 +777,7 @@ pub fn build(
                     );
                 }
                 crate::widgets::crop_overlay::update_status_label(&sl, &state, Some(first as usize));
+                update_margin_spin(&crop_sidebar, &state, &current_index);
             }
             crate::widgets::crop_overlay::queue_all_overlays(&overlays);
         }
@@ -820,6 +833,211 @@ pub fn build(
     );
 
     color::wire_color_handlers(&color_sidebar, state.clone());
+
+    // ---- Auto Detect button (OpenCV) ---------------------------------------
+    #[cfg(feature = "autodetect")]
+    {
+        use recto_core::{CropBox, Rotation};
+        use crate::window::show_toast;
+
+        let state = state.clone();
+        let spinner_w = spinner.downgrade();
+        let ci = current_index.clone();
+        let ov = overlays.clone();
+        let si = selected_indices.clone();
+        let chips_w = crop_sidebar.preset_chips.downgrade();
+        let sl_w = crop_sidebar.status_lbl.downgrade();
+        let cb_cl = preset_callbacks.clone();
+        let btn_w = crop_sidebar.btn_auto.downgrade();
+        let cs = crop_sidebar.clone();
+
+        crop_sidebar.btn_auto.clone().connect_clicked(move |_| {
+            let Some(btn) = btn_w.upgrade() else { return };
+            let Some(spinner) = spinner_w.upgrade() else { return };
+            let cs = cs.clone();
+
+            let pages: Vec<(usize, std::path::PathBuf, Rotation)> = {
+                let project = state.project();
+                project
+                    .pages
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| (i, p.path.clone(), p.rotation))
+                    .collect()
+            };
+            if pages.is_empty() {
+                return;
+            }
+
+            spinner.set_visible(true);
+            spinner.start();
+            btn.set_sensitive(false);
+
+            {
+                let n = state.project().crop_presets.len();
+                for i in (0..n).rev() {
+                    state.dispatch_without_undo(Command::RemoveCropPreset(i));
+                }
+            }
+
+            let (tx, rx) = async_channel::unbounded();
+
+            // Clone everything the async block will need
+            let state2 = state.clone();
+            let btn2 = btn.clone();
+            let spinner2 = spinner.clone();
+            let ci = ci.clone();
+            let ov = ov.clone();
+            let si = si.clone();
+            let cb_cl = cb_cl.clone();
+            let picker_w2 = Rc::downgrade(&picker);
+            let chips_w2 = chips_w.clone();
+            let sl_w2 = sl_w.clone();
+
+            glib::MainContext::default().spawn_local(async move {
+                let jq = JobQueue::new();
+
+                jq.spawn(move || {
+                    let paths: Vec<(usize, &std::path::Path, Rotation)> = pages
+                        .iter()
+                        .map(|(i, p, r)| (*i, p.as_path(), *r))
+                        .collect();
+                    let results = recto_core::autodetect::detect_all_pages(&paths);
+                    tracing::info!("autodetect worker: {} page(s) detected", results.len());
+                    let detections: Vec<(usize, CropBox)> =
+                        results.iter().map(|(idx, cb, _, _)| (*idx, *cb)).collect();
+                    let clusters = recto_core::autodetect::cluster_by_similarity(&detections);
+                    tracing::info!("autodetect worker: {} cluster(s)", clusters.len());
+                    match tx.send_blocking((results, clusters)) {
+                        Ok(()) => tracing::info!("autodetect worker: result sent OK"),
+                        Err(e) => tracing::error!("autodetect worker: send failed: {:?}", e),
+                    }
+                });
+
+                match rx.recv().await {
+                    Ok((results, clusters)) => {
+                        if results.is_empty() {
+                            spinner2.stop();
+                            spinner2.set_visible(false);
+                            btn2.set_sensitive(true);
+                            show_toast("Auto-detection failed: no pages detected");
+                            return;
+                        }
+
+                        let info_map: std::collections::HashMap<usize, (CropBox, u32, u32)> = results
+                            .into_iter()
+                            .map(|(idx, cb, w, h)| (idx, (cb, w, h)))
+                            .collect();
+
+                        for cluster in &clusters {
+                            state2.dispatch(Command::AddCropPreset(cluster.preset.clone()));
+                            let pi = state2.project().crop_presets.len() - 1;
+                            for &page_idx in &cluster.page_indices {
+                                let (detection, img_w, img_h) =
+                                    info_map.get(&page_idx).copied().unwrap_or((
+                                        CropBox {
+                                            x: 0,
+                                            y: 0,
+                                            w: cluster.preset.w,
+                                            h: cluster.preset.h,
+                                        },
+                                        cluster.preset.w.max(1),
+                                        cluster.preset.h.max(1),
+                                    ));
+
+                                // Center the median preset size on the individual detection
+                                let cx = detection.x as i32 + (detection.w as i32 / 2);
+                                let cy = detection.y as i32 + (detection.h as i32 / 2);
+
+                                let mut final_w = cluster.preset.w;
+                                let mut final_h = cluster.preset.h;
+
+                                // Proportionally scale down if preset is larger than image
+                                if img_w > 0 && img_h > 0 && (final_w > img_w || final_h > img_h) {
+                                    let scale = (img_w as f32 / final_w as f32)
+                                        .min(img_h as f32 / final_h as f32);
+                                    final_w = (final_w as f32 * scale) as u32;
+                                    final_h = (final_h as f32 * scale) as u32;
+                                }
+
+                                let mut final_x = (cx - (final_w as i32 / 2)).max(0) as u32;
+                                let mut final_y = (cy - (final_h as i32 / 2)).max(0) as u32;
+
+                                // Ensure x+w and y+h don't exceed image boundaries
+                                if img_w > 0 && final_x + final_w > img_w {
+                                    final_x = img_w.saturating_sub(final_w);
+                                }
+                                if img_h > 0 && final_y + final_h > img_h {
+                                    final_y = img_h.saturating_sub(final_h);
+                                }
+
+                                let crop = CropBox {
+                                    x: final_x,
+                                    y: final_y,
+                                    w: final_w.min(img_w).max(1),
+                                    h: final_h.min(img_h).max(1),
+                                };
+
+                                state2.dispatch_without_undo(Command::SetCropPreset {
+                                    index: page_idx,
+                                    preset: Some(pi),
+                                });
+                                state2.dispatch_without_undo(Command::SetCrop {
+                                    index: page_idx,
+                                    crop: Some(crop),
+                                });
+                            }
+                        }
+
+
+                        spinner2.stop();
+                        spinner2.set_visible(false);
+                        btn2.set_sensitive(true);
+
+                        let Some(chips) = chips_w2.upgrade() else { return };
+                        let Some(picker) = picker_w2.upgrade() else { return };
+                        let Some(sl) = sl_w2.upgrade() else { return };
+
+                        {
+                            let project = state2.project();
+                            crate::widgets::preset_chips::refresh_preset_chips(
+                                &chips, &project, ci.clone(), &picker, &ov, &si, &cb_cl,
+                            );
+                        }
+                        if let Some(idx) = ci.get() {
+                            crate::widgets::crop_overlay::update_status_label(
+                                &sl, &state2, Some(idx),
+                            );
+                            if let Some(r) = {
+                                let project = state2.project();
+                                project.pages.get(idx).and_then(|p| p.crop).map(recto_core::Rect::from)
+                            } {
+                                picker.set_crop(Some(r));
+                            }
+                            update_margin_spin(&cs, &state2, &ci);
+                        }
+                        crate::widgets::crop_overlay::queue_all_overlays(&ov);
+
+                        let total_pages: usize = clusters.iter().map(|c| c.page_indices.len()).sum();
+                        show_toast(&format!(
+                            "Detected {} preset{} across {} page{}",
+                            clusters.len(),
+                            if clusters.len() == 1 { "" } else { "s" },
+                            total_pages,
+                            if total_pages == 1 { "" } else { "s" },
+                        ));
+                    }
+                    Err(_) => {
+                        tracing::error!("autodetect: channel closed unexpectedly");
+                        spinner2.stop();
+                        spinner2.set_visible(false);
+                        btn2.set_sensitive(true);
+                        show_toast("Auto-detection failed");
+                    }
+                }
+            });
+        });
+    }
 
     paned.upcast()
 }

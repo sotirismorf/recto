@@ -5,6 +5,9 @@ pub mod export;
 pub mod io;
 pub mod transform;
 
+#[cfg(feature = "autodetect")]
+pub mod autodetect;
+
 pub use command::{AppEvent, AppState, Command};
 pub use domain::crop::{CropBox, CropPreset};
 pub use domain::export::{ExportSettings, OutputSize, PdfCompression};

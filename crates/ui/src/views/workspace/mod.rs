@@ -301,18 +301,27 @@ pub fn build(
     grid_scroll.add_controller(click_gesture);
 
     // ---- Layout ------------------------------------------------------------
-    let preview_area = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
+    let empty_page = adw::StatusPage::builder()
+        .icon_name("image-missing-symbolic")
+        .title("No images")
+        .description("Add images or open a project to get started")
+        .vexpand(true)
         .hexpand(true)
         .build();
-    preview_area.append(&mode_preview_stack);
+
+    let preview_stack = gtk::Stack::new();
+    preview_stack.add_named(&mode_preview_stack, Some("preview"));
+    preview_stack.add_named(&empty_page, Some("empty"));
+    preview_stack.set_visible_child_name("empty");
+    preview_stack.set_vexpand(true);
+    preview_stack.set_hexpand(true);
 
     let left_panel = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .build();
     left_panel.append(&sidebar);
     left_panel.append(&gtk::Separator::new(gtk::Orientation::Vertical));
-    left_panel.append(&preview_area);
+    left_panel.append(&preview_stack);
 
     let paned = gtk::Paned::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -429,6 +438,7 @@ pub fn build(
         let count = count.clone();
         let spinner = spinner.clone();
         let pending_tasks = pending_tasks.clone();
+        let preview_stack = preview_stack.clone();
         async move {
             while let Ok(event) = event_rx.recv().await {
                 match event {
@@ -441,6 +451,7 @@ pub fn build(
                             thumb_svc.enqueue_batch(items);
                         }
                         update_count(&count, &state);
+                        preview_stack.set_visible_child_name("preview");
                     }
                     AppEvent::PagesRemoved(ref indices) => {
                         projector_on_pages_removed(&page_store, indices);
@@ -449,6 +460,9 @@ pub fn build(
                             if let Some(preview) = preview_arrange.upgrade() {
                                 update_arrange_preview(&selection, &preview, &preview_req);
                             }
+                        }
+                        if page_store.n_items() == 0 {
+                            preview_stack.set_visible_child_name("empty");
                         }
                     }
                     AppEvent::PageChanged(idx) => {
@@ -485,6 +499,7 @@ pub fn build(
                                 update_arrange_preview(&selection, &preview, &preview_req);
                             }
                         }
+                        preview_stack.set_visible_child_name("preview");
                     }
                     AppEvent::ProjectCleared => {
                         page_store.remove_all();
@@ -493,6 +508,7 @@ pub fn build(
                             preview_req.send_dummy();
                             preview.set_texture(None);
                         }
+                        preview_stack.set_visible_child_name("empty");
                     }
                     AppEvent::ProjectChanged => {
                         sync_page_metadata(&page_store, &state);

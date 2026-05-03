@@ -210,7 +210,9 @@ pub fn wire_arrange_handlers(
                 return;
             }
             let indices: Vec<usize> = positions.iter().map(|&p| p as usize).collect();
+            let n = indices.len();
             s.dispatch(Command::RemovePages(indices));
+            crate::window::show_toast(&format!("Deleted {} page{}", n, if n == 1 { "" } else { "s" }));
         }
     ));
 }

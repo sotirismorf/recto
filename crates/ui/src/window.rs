@@ -1,6 +1,6 @@
 use adw::prelude::*;
 use gtk::{gio, glib};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -8,6 +8,20 @@ use crate::app::{new_state, new_store, Session};
 use crate::views;
 use crate::types::AppError;
 use recto_core::AppEvent;
+
+thread_local! {
+    static TOAST_OVERLAY: RefCell<Option<glib::WeakRef<adw::ToastOverlay>>> = const { RefCell::new(None) };
+}
+
+pub fn show_toast(text: &str) {
+    TOAST_OVERLAY.with_borrow(|cell| {
+        if let Some(overlay) = cell.as_ref().and_then(|w| w.upgrade()) {
+            let toast = adw::Toast::new(text);
+            toast.set_timeout(3);
+            overlay.add_toast(toast);
+        }
+    });
+}
 
 pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
     let (state, event_rx) = new_state();
@@ -51,7 +65,9 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
             if paths.is_empty() {
                 return;
             }
+            let n = paths.len();
             state.dispatch(recto_core::Command::AddPages(paths));
+            show_toast(&format!("Added {} image{}", n, if n == 1 { "" } else { "s" }));
         })
     };
 
@@ -59,8 +75,10 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         let state = state.clone();
         let page_store = page_store.clone();
         Rc::new(move |project: recto_core::Project| {
+            let n = project.pages.len();
             page_store.remove_all();
             state.load_project(project);
+            show_toast(&format!("Opened project with {} page{}", n, if n == 1 { "" } else { "s" }));
         })
     };
 
@@ -171,9 +189,13 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
     main_stack.add_named(&workspace, Some("main"));
     main_stack.set_visible_child_name("start");
 
+    let toast_overlay = adw::ToastOverlay::new();
+    toast_overlay.set_child(Some(&main_stack));
+    TOAST_OVERLAY.with_borrow_mut(|cell| *cell = Some(toast_overlay.downgrade()));
+
     let toolbar = adw::ToolbarView::new();
     toolbar.add_top_bar(&header);
-    toolbar.set_content(Some(&main_stack));
+    toolbar.set_content(Some(&toast_overlay));
     window.set_content(Some(&toolbar));
 
     // ---- Title sync -------------------------------------------------------
@@ -209,10 +231,12 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
                 Ok(()) => {
                     session.set_path(Some(&path));
                     session.clear_dirty();
+                    show_toast("Project saved");
                     true
                 }
                 Err(e) => {
                     tracing::error!("save project: {e}");
+                    show_toast("Failed to save project");
                     false
                 }
             }

@@ -151,7 +151,9 @@ pub(crate) fn refresh_preset_chips(
             lock_btn.set_tooltip_text(Some("Locked — drag won't change the preset size"));
         } else {
             lock_btn.set_icon_name("changes-allow-symbolic");
-            lock_btn.set_tooltip_text(Some("Unlocked — drag updates the preset for all pages in this group"));
+            lock_btn.set_tooltip_text(Some(
+                "Unlocked — drag updates the preset for all pages in this group",
+            ));
         }
 
         {
@@ -176,12 +178,22 @@ pub(crate) fn refresh_preset_chips(
                     btn.set_tooltip_text(Some("Locked — drag won't change the preset size"));
                 } else {
                     btn.set_icon_name("changes-allow-symbolic");
-                    btn.set_tooltip_text(Some("Unlocked — drag updates the preset for all pages in this group"));
+                    btn.set_tooltip_text(Some(
+                        "Unlocked — drag updates the preset for all pages in this group",
+                    ));
                 }
                 (cb_clone.on_set_crop_preset_locked)(pi, locked);
                 if let (Some(picker), Some(chips)) = (picker_weak.upgrade(), chips_weak.upgrade()) {
                     let project = (cb_clone.get_project)();
-                    refresh_preset_chips(&chips, &project, ci.clone(), &picker, &ov, &sel, &cb_clone);
+                    refresh_preset_chips(
+                        &chips,
+                        &project,
+                        ci.clone(),
+                        &picker,
+                        &ov,
+                        &sel,
+                        &cb_clone,
+                    );
                 }
             });
         }
@@ -229,7 +241,15 @@ pub(crate) fn refresh_preset_chips(
                         }
                     }
                     let project = (cb_clone.get_project)();
-                    refresh_preset_chips(&chips, &project, ci.clone(), &picker, &ov, &sel, &cb_clone);
+                    refresh_preset_chips(
+                        &chips,
+                        &project,
+                        ci.clone(),
+                        &picker,
+                        &ov,
+                        &sel,
+                        &cb_clone,
+                    );
                 });
             }
 
@@ -299,7 +319,15 @@ pub(crate) fn auto_detect_presets(
         });
         for &idx in indices {
             (callbacks.on_set_crop_preset)(idx, Some(pi));
-            (callbacks.on_set_crop)(idx, Some(CropBox { x: 0, y: 0, w: *w, h: *h }));
+            (callbacks.on_set_crop)(
+                idx,
+                Some(CropBox {
+                    x: 0,
+                    y: 0,
+                    w: *w,
+                    h: *h,
+                }),
+            );
         }
     }
 }

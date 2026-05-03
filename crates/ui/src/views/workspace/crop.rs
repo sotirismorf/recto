@@ -1,8 +1,8 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use gtk::prelude::*;
 use gtk::glib;
+use gtk::prelude::*;
 
 use crate::app::State;
 use crate::widgets::crop_picker::CropPicker;
@@ -255,7 +255,13 @@ pub fn wire_crop_handlers(
         {
             let project = s.project();
             crate::widgets::preset_chips::refresh_preset_chips(
-                &chips, &project, ci.clone(), &p, &ov, &si, &cb,
+                &chips,
+                &project,
+                ci.clone(),
+                &p,
+                &ov,
+                &si,
+                &cb,
             );
         }
         crate::widgets::crop_overlay::update_status_label(&sl, &s, Some(idx));
@@ -337,7 +343,7 @@ pub fn wire_crop_handlers(
                     w: 0,
                     h: 0,
                 });
-                
+
                 // Centering logic: move x and y in the opposite direction of the margin change
                 cb.x = (cb.x as i32 - delta).max(0) as u32;
                 cb.y = (cb.y as i32 - delta).max(0) as u32;
@@ -365,7 +371,13 @@ pub fn wire_crop_handlers(
 
             let project_after = s_m.project();
             crate::widgets::preset_chips::refresh_preset_chips(
-                &chips_m, &project_after, ci_m.clone(), &p_m, &ov_m, &si_m, &cb_m,
+                &chips_m,
+                &project_after,
+                ci_m.clone(),
+                &p_m,
+                &ov_m,
+                &si_m,
+                &cb_m,
             );
             crate::widgets::crop_overlay::update_status_label(&sl_m, &s_m, Some(idx));
             crate::widgets::crop_overlay::queue_all_overlays(&ov_m);

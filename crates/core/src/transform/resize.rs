@@ -13,8 +13,16 @@ pub fn apply(img: DynamicImage, output: Option<OutputSize>, scale: Scale) -> Dyn
         None => (img.width(), img.height()),
     };
     let factor = scale.as_factor();
-    let nw = if factor >= 1.0 { w } else { ((w as f64 * factor).round() as u32).max(1) };
-    let nh = if factor >= 1.0 { h } else { ((h as f64 * factor).round() as u32).max(1) };
+    let nw = if factor >= 1.0 {
+        w
+    } else {
+        ((w as f64 * factor).round() as u32).max(1)
+    };
+    let nh = if factor >= 1.0 {
+        h
+    } else {
+        ((h as f64 * factor).round() as u32).max(1)
+    };
     if nw == img.width() && nh == img.height() {
         return img;
     }

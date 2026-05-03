@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use crate::app::{new_state, new_store, Session};
-use crate::views;
 use crate::types::AppError;
+use crate::views;
 use recto_core::AppEvent;
 
 thread_local! {
@@ -67,7 +67,11 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
             }
             let n = paths.len();
             state.dispatch(recto_core::Command::AddPages(paths));
-            show_toast(&format!("Added {} image{}", n, if n == 1 { "" } else { "s" }));
+            show_toast(&format!(
+                "Added {} image{}",
+                n,
+                if n == 1 { "" } else { "s" }
+            ));
         })
     };
 
@@ -78,7 +82,11 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
             let n = project.pages.len();
             page_store.remove_all();
             state.load_project(project);
-            show_toast(&format!("Opened project with {} page{}", n, if n == 1 { "" } else { "s" }));
+            show_toast(&format!(
+                "Opened project with {} page{}",
+                n,
+                if n == 1 { "" } else { "s" }
+            ));
         })
     };
 
@@ -323,12 +331,10 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
             dialog.set_default_response(Some("save"));
             dialog.set_close_response("cancel");
             let save_now = save_now.clone();
-            dialog.connect_response(None, move |_dlg, response| {
-                match response {
-                    "discard" => after(),
-                    "save" => save_now(Some(after.clone())),
-                    _ => {}
-                }
+            dialog.connect_response(None, move |_dlg, response| match response {
+                "discard" => after(),
+                "save" => save_now(Some(after.clone())),
+                _ => {}
             });
             dialog.present(Some(&window));
         }) as Rc<dyn Fn(Rc<dyn Fn()>)>
@@ -401,7 +407,11 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         let window = window.clone();
         act_export.connect_activate(move |_, _| {
             let jq = Rc::new(crate::worker::JobQueue::new());
-            crate::views::export::show_export_dialog(state.clone(), window.upcast_ref::<gtk::Window>(), jq);
+            crate::views::export::show_export_dialog(
+                state.clone(),
+                window.upcast_ref::<gtk::Window>(),
+                jq,
+            );
         });
     }
 

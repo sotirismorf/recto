@@ -1,15 +1,15 @@
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use adw::prelude::*;
 use gtk::{gio, glib};
 
 use crate::app::State;
 use crate::worker::JobQueue;
-use recto_core::{load_pdf_meta, save_pdf_meta};
 use recto_core::error::Error;
+use recto_core::{load_pdf_meta, save_pdf_meta};
 use recto_core::{Command, ExportSettings, JpegQuality, PdfCompression, PdfMeta, Scale};
 
 enum ExportMsg {
@@ -75,7 +75,11 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
     // ---- Output directory ActionRow ----------------------------------------
     let dir_row = adw::ActionRow::builder()
         .title("Output directory")
-        .subtitle(if p.output_dir.as_os_str().is_empty() { "Choose\u{2026}" } else { "" })
+        .subtitle(if p.output_dir.as_os_str().is_empty() {
+            "Choose\u{2026}"
+        } else {
+            ""
+        })
         .build();
     {
         if !p.output_dir.as_os_str().is_empty() {
@@ -105,9 +109,7 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
         .label("PDF Metadata\u{2026}")
         .valign(gtk::Align::Center)
         .build();
-    let meta_row = adw::ActionRow::builder()
-        .title("PDF metadata")
-        .build();
+    let meta_row = adw::ActionRow::builder().title("PDF metadata").build();
     meta_row.add_suffix(&meta_btn);
 
     // ---- Quality SpinRow (JPEG / PDF-JPEG) ----------------------------------
@@ -147,9 +149,7 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
     scale_row.set_subtitle("Percentage of original size");
 
     // ---- PreferencesGroup containers ---------------------------------------
-    let output_group = adw::PreferencesGroup::builder()
-        .title("Format")
-        .build();
+    let output_group = adw::PreferencesGroup::builder().title("Format").build();
     output_group.add(&format_combo);
     output_group.add(&pdf_enc_combo);
     output_group.add(&dir_row);
@@ -157,9 +157,7 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
     output_group.add(&pdf_name_row);
     output_group.add(&meta_row);
 
-    let quality_group = adw::PreferencesGroup::builder()
-        .title("Quality")
-        .build();
+    let quality_group = adw::PreferencesGroup::builder().title("Quality").build();
     quality_group.add(&quality_row);
     quality_group.add(&png_comp_row);
     quality_group.add(&scale_row);
@@ -244,10 +242,18 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
     content_box.append(&action_box);
 
     // ---- Visibility logic --------------------------------------------------
-    fn is_jpeg(format_combo: &adw::ComboRow) -> bool { format_combo.selected() == 0 }
-    fn is_png(format_combo: &adw::ComboRow) -> bool { format_combo.selected() == 1 }
-    fn is_pdf(format_combo: &adw::ComboRow) -> bool { format_combo.selected() == 3 }
-    fn pdf_enc_is_jpeg(pdf_enc_combo: &adw::ComboRow) -> bool { pdf_enc_combo.selected() == 0 }
+    fn is_jpeg(format_combo: &adw::ComboRow) -> bool {
+        format_combo.selected() == 0
+    }
+    fn is_png(format_combo: &adw::ComboRow) -> bool {
+        format_combo.selected() == 1
+    }
+    fn is_pdf(format_combo: &adw::ComboRow) -> bool {
+        format_combo.selected() == 3
+    }
+    fn pdf_enc_is_jpeg(pdf_enc_combo: &adw::ComboRow) -> bool {
+        pdf_enc_combo.selected() == 0
+    }
 
     let update_visibility = {
         let format_combo = format_combo.clone();
@@ -263,7 +269,8 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
             prefix_row.set_visible(!pdf);
             pdf_name_row.set_visible(pdf);
             meta_row.set_visible(pdf);
-            quality_row.set_visible(is_jpeg(&format_combo) || (pdf && pdf_enc_is_jpeg(&pdf_enc_combo)));
+            quality_row
+                .set_visible(is_jpeg(&format_combo) || (pdf && pdf_enc_is_jpeg(&pdf_enc_combo)));
             png_comp_row.set_visible(is_png(&format_combo));
         }
     };
@@ -282,8 +289,12 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
             update();
             let idx = combo.selected();
             let settings = match idx {
-                0 => ExportSettings::Jpeg { quality: JpegQuality::new(quality_adj.value() as u8) },
-                1 => ExportSettings::Png { compression: png_comp_adj.value() as u8 },
+                0 => ExportSettings::Jpeg {
+                    quality: JpegQuality::new(quality_adj.value() as u8),
+                },
+                1 => ExportSettings::Png {
+                    compression: png_comp_adj.value() as u8,
+                },
                 2 => ExportSettings::Tiff,
                 3 => {
                     let enc = match pdf_enc_combo.selected() {
@@ -331,7 +342,9 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
         move |adj| {
             let q = JpegQuality::new(adj.value() as u8);
             if is_jpeg(&format_combo) {
-                state.dispatch(Command::SetExportSettings(ExportSettings::Jpeg { quality: q }));
+                state.dispatch(Command::SetExportSettings(ExportSettings::Jpeg {
+                    quality: q,
+                }));
             } else if is_pdf(&format_combo) && pdf_enc_is_jpeg(&pdf_enc_combo) {
                 state.dispatch(Command::SetExportSettings(ExportSettings::Pdf {
                     compression: PdfCompression::Jpeg,
@@ -526,7 +539,8 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
                         status_lbl.set_label(&format!("Processed {}/{}", done, total));
                     }
                     ExportMsg::Done(lines) => {
-                        let cancelled = lines.len() == 1 && !lines[0].0 && lines[0].1 == "Cancelled";
+                        let cancelled =
+                            lines.len() == 1 && !lines[0].0 && lines[0].1 == "Cancelled";
 
                         export_btn.set_visible(true);
                         cancel_btn.set_visible(false);
@@ -614,9 +628,7 @@ fn show_pdf_meta_dialog(parent: Option<gtk::Window>, meta_rc: Rc<RefCell<PdfMeta
         .build();
     content.append(&group);
 
-    let cancel_btn = gtk::Button::builder()
-        .label("Cancel")
-        .build();
+    let cancel_btn = gtk::Button::builder().label("Cancel").build();
     let save_btn = gtk::Button::builder()
         .label("Save")
         .css_classes(["suggested-action"])

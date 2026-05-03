@@ -1,5 +1,5 @@
-use gtk::prelude::*;
 use gtk::glib;
+use gtk::prelude::*;
 
 use crate::app::State;
 use recto_core::{Brightness, Command, Contrast};
@@ -80,7 +80,9 @@ pub fn wire_color_handlers(sidebar: &ColorSidebar, state: State) {
         #[strong]
         s,
         move |scale| {
-            s.dispatch(Command::SetBrightness(Brightness::new(scale.value() as f32)));
+            s.dispatch(Command::SetBrightness(
+                Brightness::new(scale.value() as f32),
+            ));
         }
     ));
 

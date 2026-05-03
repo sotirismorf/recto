@@ -8,8 +8,8 @@ use std::sync::OnceLock;
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 
-use crate::widgets::page_item::PageItem;
 use crate::types::PageId;
+use crate::widgets::page_item::PageItem;
 
 pub const THUMB_PX: i32 = 150;
 pub const CARD_CHARS: i32 = 18;

@@ -18,7 +18,10 @@ pub struct PipelineContext<'a> {
 }
 
 impl<'a> PipelineContext<'a> {
-    pub fn from_page(project: &'a crate::domain::project::Project, page: &'a crate::domain::project::Page) -> Self {
+    pub fn from_page(
+        project: &'a crate::domain::project::Project,
+        page: &'a crate::domain::project::Page,
+    ) -> Self {
         Self {
             source_path: &page.path,
             rotation: page.rotation,

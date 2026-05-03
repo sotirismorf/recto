@@ -1,7 +1,7 @@
 mod arrange;
 mod color;
-mod css;
 mod crop;
+mod css;
 pub mod helpers;
 
 use std::cell::{Cell, RefCell};
@@ -14,20 +14,20 @@ use gtk::{gdk, gdk_pixbuf, gio, glib};
 use crate::app::State;
 use crate::latest::PreviewService;
 use crate::widgets::color_preview::ColorReq;
-use crate::widgets::preview_canvas::PreviewCanvas;
-use crate::widgets::zoom_pan::{ZoomPanConfig, ZoomPanController};
 use crate::widgets::crop_picker::CropPicker;
+use crate::widgets::page_item::PageItem;
+use crate::widgets::preset_chips::PresetCallbacks;
+use crate::widgets::preview_canvas::PreviewCanvas;
 use crate::widgets::thumbnail_loader::{
     decrement_pending, update_count, LoadMsg, ThumbData, ThumbReq, ThumbnailService,
 };
-use crate::widgets::page_item::PageItem;
-use crate::widgets::preset_chips::PresetCallbacks;
+use crate::widgets::zoom_pan::{ZoomPanConfig, ZoomPanController};
 use recto_core::{AppEvent, Command};
 
 use crate::views::workspace::crop::update_margin_spin;
-use css::{load_preset_css, load_sidebar_css};
 #[cfg(feature = "autodetect")]
 use crate::worker::JobQueue;
+use css::{load_preset_css, load_sidebar_css};
 use helpers::{
     make_mode_button, project_page_into_store, sync_page_metadata, update_arrange_preview,
 };
@@ -61,7 +61,10 @@ fn projector_on_pages_added(
             let item = PageItem::new_placeholder(path.clone());
             item.set_rotation(rotation);
             store.append(&item);
-            ThumbReq { id: item.stable_id(), path }
+            ThumbReq {
+                id: item.stable_id(),
+                path,
+            }
         })
         .collect()
 }
@@ -147,9 +150,9 @@ pub fn build(
         });
 
     let (color_preview_svc, color_req, rx_color_res) =
-        PreviewService::<ColorReq, crate::widgets::color_preview::ColorResult>::new(
-            |_id, req| crate::widgets::color_preview::render_preview(&req),
-        );
+        PreviewService::<ColorReq, crate::widgets::color_preview::ColorResult>::new(|_id, req| {
+            crate::widgets::color_preview::render_preview(&req)
+        });
 
     load_preset_css();
     load_sidebar_css();
@@ -269,9 +272,11 @@ pub fn build(
             let mut list = overlays.borrow_mut();
             list.retain(|w| w.upgrade().is_some());
             let da_ptr = da.as_ptr() as usize;
-            let already = list
-                .iter()
-                .any(|w| w.upgrade().map(|x| x.as_ptr() as usize == da_ptr).unwrap_or(false));
+            let already = list.iter().any(|w| {
+                w.upgrade()
+                    .map(|x| x.as_ptr() as usize == da_ptr)
+                    .unwrap_or(false)
+            });
             if !already {
                 let w = glib::WeakRef::new();
                 w.set(Some(da));
@@ -280,7 +285,8 @@ pub fn build(
         })
     };
 
-    let (_grid_view, grid_scroll) = crate::widgets::thumbnail_grid::build_grid_scroll(&selection, &factory);
+    let (_grid_view, grid_scroll) =
+        crate::widgets::thumbnail_grid::build_grid_scroll(&selection, &factory);
 
     let click_gesture = gtk::GestureClick::builder().build();
     click_gesture.connect_pressed(glib::clone!(
@@ -480,9 +486,7 @@ pub fn build(
                         if current_mode.get() == Mode::Color {
                             let project = state.project();
                             crate::widgets::color_preview::send_preview_req(
-                                &project,
-                                &selection,
-                                &color_req,
+                                &project, &selection, &color_req,
                             );
                         }
                     }
@@ -620,15 +624,17 @@ pub fn build(
                                 &preset_callbacks,
                             );
                         }
-                        crate::widgets::crop_overlay::update_status_label(&sl, &state, Some(first as usize));
+                        crate::widgets::crop_overlay::update_status_label(
+                            &sl,
+                            &state,
+                            Some(first as usize),
+                        );
                         update_margin_spin(&crop_sidebar, &state, &current_index);
                     }
                 }
                 Mode::Color => {
-                    {
-                        let project = state.project();
-                        crate::widgets::color_preview::send_preview_req(&project, sel, &color_req);
-                    }
+                    let project = state.project();
+                    crate::widgets::color_preview::send_preview_req(&project, sel, &color_req);
                 }
             }
         }
@@ -652,7 +658,13 @@ pub fn build(
             {
                 let project = state.project();
                 crate::widgets::preset_chips::refresh_preset_chips(
-                    &chips, &project, ci.clone(), &p, &ov, &sel_indices, &cb,
+                    &chips,
+                    &project,
+                    ci.clone(),
+                    &p,
+                    &ov,
+                    &sel_indices,
+                    &cb,
                 );
             }
             crate::widgets::crop_overlay::update_status_label(&sl, &state, Some(idx));
@@ -731,7 +743,11 @@ pub fn build(
             if !crop_initialised.get() {
                 crop_initialised.set(true);
                 let project = state.project().clone();
-                crate::widgets::preset_chips::auto_detect_presets(&project, &page_store, &preset_callbacks);
+                crate::widgets::preset_chips::auto_detect_presets(
+                    &project,
+                    &page_store,
+                    &preset_callbacks,
+                );
             }
 
             let bs = selection.selection();
@@ -776,7 +792,11 @@ pub fn build(
                         &preset_callbacks,
                     );
                 }
-                crate::widgets::crop_overlay::update_status_label(&sl, &state, Some(first as usize));
+                crate::widgets::crop_overlay::update_status_label(
+                    &sl,
+                    &state,
+                    Some(first as usize),
+                );
                 update_margin_spin(&crop_sidebar, &state, &current_index);
             }
             crate::widgets::crop_overlay::queue_all_overlays(&overlays);
@@ -837,8 +857,8 @@ pub fn build(
     // ---- Auto Detect button (OpenCV) ---------------------------------------
     #[cfg(feature = "autodetect")]
     {
-        use recto_core::{CropBox, Rotation};
         use crate::window::show_toast;
+        use recto_core::{CropBox, Rotation};
 
         let state = state.clone();
         let spinner_w = spinner.downgrade();
@@ -853,7 +873,9 @@ pub fn build(
 
         crop_sidebar.btn_auto.clone().connect_clicked(move |_| {
             let Some(btn) = btn_w.upgrade() else { return };
-            let Some(spinner) = spinner_w.upgrade() else { return };
+            let Some(spinner) = spinner_w.upgrade() else {
+                return;
+            };
             let cs = cs.clone();
 
             let pages: Vec<(usize, std::path::PathBuf, Rotation)> = {
@@ -924,10 +946,11 @@ pub fn build(
                             return;
                         }
 
-                        let info_map: std::collections::HashMap<usize, (CropBox, u32, u32)> = results
-                            .into_iter()
-                            .map(|(idx, cb, w, h)| (idx, (cb, w, h)))
-                            .collect();
+                        let info_map: std::collections::HashMap<usize, (CropBox, u32, u32)> =
+                            results
+                                .into_iter()
+                                .map(|(idx, cb, w, h)| (idx, (cb, w, h)))
+                                .collect();
 
                         for cluster in &clusters {
                             state2.dispatch(Command::AddCropPreset(cluster.preset.clone()));
@@ -989,28 +1012,43 @@ pub fn build(
                             }
                         }
 
-
                         spinner2.stop();
                         spinner2.set_visible(false);
                         btn2.set_sensitive(true);
 
-                        let Some(chips) = chips_w2.upgrade() else { return };
-                        let Some(picker) = picker_w2.upgrade() else { return };
+                        let Some(chips) = chips_w2.upgrade() else {
+                            return;
+                        };
+                        let Some(picker) = picker_w2.upgrade() else {
+                            return;
+                        };
                         let Some(sl) = sl_w2.upgrade() else { return };
 
                         {
                             let project = state2.project();
                             crate::widgets::preset_chips::refresh_preset_chips(
-                                &chips, &project, ci.clone(), &picker, &ov, &si, &cb_cl,
+                                &chips,
+                                &project,
+                                ci.clone(),
+                                &picker,
+                                &ov,
+                                &si,
+                                &cb_cl,
                             );
                         }
                         if let Some(idx) = ci.get() {
                             crate::widgets::crop_overlay::update_status_label(
-                                &sl, &state2, Some(idx),
+                                &sl,
+                                &state2,
+                                Some(idx),
                             );
                             if let Some(r) = {
                                 let project = state2.project();
-                                project.pages.get(idx).and_then(|p| p.crop).map(recto_core::Rect::from)
+                                project
+                                    .pages
+                                    .get(idx)
+                                    .and_then(|p| p.crop)
+                                    .map(recto_core::Rect::from)
                             } {
                                 picker.set_crop(Some(r));
                             }
@@ -1018,7 +1056,8 @@ pub fn build(
                         }
                         crate::widgets::crop_overlay::queue_all_overlays(&ov);
 
-                        let total_pages: usize = clusters.iter().map(|c| c.page_indices.len()).sum();
+                        let total_pages: usize =
+                            clusters.iter().map(|c| c.page_indices.len()).sum();
                         show_toast(&format!(
                             "Detected {} preset{} across {} page{}",
                             clusters.len(),

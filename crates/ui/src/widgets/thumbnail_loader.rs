@@ -59,9 +59,7 @@ impl ThumbnailService {
                 let file_dims = gdk_pixbuf::Pixbuf::file_info(&req.path)
                     .map(|(_, w, h)| (w as u32, h as u32))
                     .unwrap_or((0, 0));
-                if let Ok(pb) =
-                    gdk_pixbuf::Pixbuf::from_file_at_scale(&req.path, 256, 256, true)
-                {
+                if let Ok(pb) = gdk_pixbuf::Pixbuf::from_file_at_scale(&req.path, 256, 256, true) {
                     let pb = pb.apply_embedded_orientation().unwrap_or(pb);
                     let (orig_width, orig_height) =
                         exif_corrected_dims(file_dims, pb.width(), pb.height());
@@ -83,11 +81,7 @@ impl ThumbnailService {
     }
 }
 
-pub(crate) fn exif_corrected_dims(
-    file_dims: (u32, u32),
-    thumb_w: i32,
-    thumb_h: i32,
-) -> (u32, u32) {
+pub(crate) fn exif_corrected_dims(file_dims: (u32, u32), thumb_w: i32, thumb_h: i32) -> (u32, u32) {
     let (fw, fh) = file_dims;
     if fw == 0 || fh == 0 || thumb_w == 0 || thumb_h == 0 {
         return file_dims;

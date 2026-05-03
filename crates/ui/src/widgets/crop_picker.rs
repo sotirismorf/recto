@@ -86,8 +86,11 @@ impl Handle {
                 let dx = end.0 - start.0;
                 let dy = end.1 - start.1;
                 Some(
-                    Rect::new(initial.x + dx, initial.y + dy, initial.w, initial.h)
-                        .clamp_to(iw, ih, MIN_CROP_PX),
+                    Rect::new(initial.x + dx, initial.y + dy, initial.w, initial.h).clamp_to(
+                        iw,
+                        ih,
+                        MIN_CROP_PX,
+                    ),
                 )
             }
             Handle::Corner(c) => {
@@ -441,7 +444,7 @@ impl CropPicker {
             self.area.set_cursor(None);
             return;
         };
-        
+
         let (rect, locked) = {
             let s = self.state.borrow();
             let rect = match s.crop {
@@ -514,11 +517,7 @@ impl CropPicker {
             (state.clone(), pi, cb.w, cb.h)
         };
 
-        state.dispatch(Command::SetCropPresetSize {
-            index: pi,
-            w,
-            h,
-        });
+        state.dispatch(Command::SetCropPresetSize { index: pi, w, h });
     }
 
     fn draw_overlay(&self, cr: &gtk::cairo::Context) {
@@ -635,12 +634,8 @@ mod tests {
     #[test]
     fn corner_resize_respects_min() {
         let initial = Rect::new(0.0, 0.0, 100.0, 100.0);
-        let r = Handle::Corner(Corner::SE).apply(
-            initial,
-            (100.0, 100.0),
-            (0.0, 0.0),
-            (200.0, 200.0),
-        );
+        let r =
+            Handle::Corner(Corner::SE).apply(initial, (100.0, 100.0), (0.0, 0.0), (200.0, 200.0));
         if let Some(r) = r {
             assert!(r.w >= MIN_CROP_PX);
             assert!(r.h >= MIN_CROP_PX);

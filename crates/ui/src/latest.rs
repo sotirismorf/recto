@@ -84,9 +84,7 @@ impl<Req: Send + 'static, Res: Send + 'static> PreviewService<Req, Res> {
     /// `process` is called on the worker thread for each request.
     /// It receives the request ID and payload; return `Some(Res)` to
     /// send a result tagged with the request ID, or `None` to skip.
-    pub fn new<F>(
-        process: F,
-    ) -> (Self, RequestDedup<Req>, async_channel::Receiver<(u64, Res)>)
+    pub fn new<F>(process: F) -> (Self, RequestDedup<Req>, async_channel::Receiver<(u64, Res)>)
     where
         F: Fn(u64, Req) -> Option<Res> + Send + 'static,
     {

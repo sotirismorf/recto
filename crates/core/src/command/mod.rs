@@ -17,11 +17,26 @@ use std::path::PathBuf;
 pub enum Command {
     AddPages(Vec<PathBuf>),
     RemovePages(Vec<usize>),
-    ReorderPages { from: usize, to: usize },
-    SetRotation { index: usize, rotation: Rotation },
-    SetCrop { index: usize, crop: Option<CropBox> },
-    SetCropPreset { index: usize, preset: Option<usize> },
-    SetOutputSize { index: usize, size: Option<OutputSize> },
+    ReorderPages {
+        from: usize,
+        to: usize,
+    },
+    SetRotation {
+        index: usize,
+        rotation: Rotation,
+    },
+    SetCrop {
+        index: usize,
+        crop: Option<CropBox>,
+    },
+    SetCropPreset {
+        index: usize,
+        preset: Option<usize>,
+    },
+    SetOutputSize {
+        index: usize,
+        size: Option<OutputSize>,
+    },
     SetBrightness(Brightness),
     SetContrast(Contrast),
     SetExportScale(Scale),
@@ -30,6 +45,13 @@ pub enum Command {
     SetPrefix(String),
     AddCropPreset(CropPreset),
     RemoveCropPreset(usize),
-    SetCropPresetLocked { index: usize, locked: bool },
-    SetCropPresetSize { index: usize, w: u32, h: u32 },
+    SetCropPresetLocked {
+        index: usize,
+        locked: bool,
+    },
+    SetCropPresetSize {
+        index: usize,
+        w: u32,
+        h: u32,
+    },
 }

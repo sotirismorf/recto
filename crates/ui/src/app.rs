@@ -60,7 +60,11 @@ impl Session {
     }
 
     pub fn state(&self) -> State {
-        self.imp().state.borrow().clone().expect("Session state not set")
+        self.imp()
+            .state
+            .borrow()
+            .clone()
+            .expect("Session state not set")
     }
 
     pub fn path(&self) -> Option<PathBuf> {

@@ -18,10 +18,7 @@ pub struct ArrangeSidebar {
     pub delete_btn: gtk::Button,
 }
 
-pub fn build_arrange_sidebar(
-    spinner: &gtk::Spinner,
-    count: &gtk::Label,
-) -> ArrangeSidebar {
+pub fn build_arrange_sidebar(spinner: &gtk::Spinner, count: &gtk::Label) -> ArrangeSidebar {
     let add_btn = gtk::Button::builder()
         .child(
             &adw::ButtonContent::builder()
@@ -129,7 +126,13 @@ pub fn wire_arrange_handlers(
                 .build();
             let filter = gtk::FileFilter::new();
             filter.set_name(Some("Images"));
-            for mime in ["image/jpeg", "image/png", "image/tiff", "image/webp", "image/bmp"] {
+            for mime in [
+                "image/jpeg",
+                "image/png",
+                "image/tiff",
+                "image/webp",
+                "image/bmp",
+            ] {
                 filter.add_mime_type(mime);
             }
             let filters = gio::ListStore::new::<gtk::FileFilter>();
@@ -212,7 +215,11 @@ pub fn wire_arrange_handlers(
             let indices: Vec<usize> = positions.iter().map(|&p| p as usize).collect();
             let n = indices.len();
             s.dispatch(Command::RemovePages(indices));
-            crate::window::show_toast(&format!("Deleted {} page{}", n, if n == 1 { "" } else { "s" }));
+            crate::window::show_toast(&format!(
+                "Deleted {} page{}",
+                n,
+                if n == 1 { "" } else { "s" }
+            ));
         }
     ));
 }

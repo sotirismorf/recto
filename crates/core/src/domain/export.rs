@@ -21,8 +21,13 @@ pub enum PdfCompression {
 #[serde(tag = "format", rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum ExportSettings {
-    Png { #[serde(default)] compression: u8 },
-    Jpeg { quality: JpegQuality },
+    Png {
+        #[serde(default)]
+        compression: u8,
+    },
+    Jpeg {
+        quality: JpegQuality,
+    },
     Tiff,
     #[serde(rename = "pdf")]
     Pdf {

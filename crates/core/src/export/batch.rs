@@ -1,13 +1,13 @@
 use crate::domain::export::ExportSettings;
-use crate::domain::project::Project;
 use crate::domain::project::Page;
-use crate::error::{Result, Error};
+use crate::domain::project::Project;
+use crate::error::{Error, Result};
 use crate::io;
-use crate::transform::{PipelineContext, transform_page};
+use crate::transform::{transform_page, PipelineContext};
 use rayon::prelude::*;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 /// Process every page in parallel, saving individual image files according to
 /// the project's [`ExportSettings`].
@@ -18,7 +18,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 /// pages already saved to disk before the cancel flag is observed will
 /// remain on disk.
 #[must_use]
-pub fn run_batch<F>(project: &Project, cancel: Arc<AtomicBool>, on_progress: F) -> Vec<Result<PathBuf>>
+pub fn run_batch<F>(
+    project: &Project,
+    cancel: Arc<AtomicBool>,
+    on_progress: F,
+) -> Vec<Result<PathBuf>>
 where
     F: Fn(usize, usize) + Sync + Send,
 {

@@ -104,12 +104,7 @@ pub(crate) fn make_mode_button(
         .orientation(gtk::Orientation::Horizontal)
         .spacing(10)
         .build();
-    content.append(
-        &gtk::Image::builder()
-            .icon_name(icon)
-            .pixel_size(16)
-            .build(),
-    );
+    content.append(&gtk::Image::builder().icon_name(icon).pixel_size(16).build());
     content.append(
         &gtk::Label::builder()
             .label(label)
@@ -118,7 +113,9 @@ pub(crate) fn make_mode_button(
             .build(),
     );
 
-    let mut builder = gtk::ToggleButton::builder().child(&content).has_frame(false);
+    let mut builder = gtk::ToggleButton::builder()
+        .child(&content)
+        .has_frame(false);
     if let Some(g) = group {
         builder = builder.group(g);
     }

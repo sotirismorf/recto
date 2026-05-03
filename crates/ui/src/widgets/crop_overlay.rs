@@ -4,12 +4,10 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk::{gio, glib};
 
-use crate::widgets::page_item::PageItem;
 use crate::app::State;
+use crate::widgets::page_item::PageItem;
 
-pub(crate) fn queue_all_overlays(
-    overlays: &Rc<RefCell<Vec<glib::WeakRef<gtk::DrawingArea>>>>,
-) {
+pub(crate) fn queue_all_overlays(overlays: &Rc<RefCell<Vec<glib::WeakRef<gtk::DrawingArea>>>>) {
     let mut list = overlays.borrow_mut();
     list.retain(|w| w.upgrade().is_some());
     for weak in list.iter() {

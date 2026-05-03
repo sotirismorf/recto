@@ -1,8 +1,8 @@
 use std::sync::OnceLock;
 
+use gtk::gdk;
 #[allow(unused_imports)]
 use gtk::prelude::*;
-use gtk::gdk;
 
 pub(crate) fn load_sidebar_css() {
     static ONCE: OnceLock<()> = OnceLock::new();

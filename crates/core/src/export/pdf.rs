@@ -3,12 +3,12 @@ use crate::domain::values::JpegQuality;
 use crate::error::{Error, Result};
 use crate::io;
 use crate::io::config::PdfMeta;
-use crate::transform::{PipelineContext, transform_page};
+use crate::transform::{transform_page, PipelineContext};
 use image::{codecs::jpeg::JpegEncoder, DynamicImage};
 use rayon::prelude::*;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 /// Export all pages as a single PDF with JPEG-encoded images.
 ///

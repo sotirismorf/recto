@@ -1,7 +1,7 @@
 use crate::domain::values::JpegQuality;
 use crate::error::Result;
-use image::{DynamicImage, ImageFormat};
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+use image::{DynamicImage, ImageFormat};
 use std::path::Path;
 
 /// Load an image from `path` using the `image` crate's auto-detection.

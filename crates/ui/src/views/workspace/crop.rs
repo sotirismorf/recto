@@ -14,7 +14,6 @@ pub struct CropSidebar {
     pub controls: gtk::Box,
     pub preset_chips: gtk::Box,
     pub btn_new: gtk::Button,
-    #[cfg_attr(not(feature = "autodetect"), allow(dead_code))]
     pub btn_auto: gtk::Button,
     pub margin_spin: gtk::SpinButton,
     pub last_margin: std::rc::Rc<std::cell::Cell<f64>>,
@@ -53,26 +52,10 @@ pub fn build_crop_sidebar() -> CropSidebar {
                 .label("Auto Detect")
                 .build(),
         )
-        .tooltip_text({
-            #[cfg(feature = "autodetect")]
-            {
-                "Automatically detect page boundaries using OpenCV"
-            }
-            #[cfg(not(feature = "autodetect"))]
-            {
-                "Build with OpenCV support to enable"
-            }
-        })
+        .tooltip_text("Automatically detect page boundaries using OpenCV")
         .build();
     btn_auto.add_css_class("flat");
-    #[cfg(feature = "autodetect")]
-    {
-        btn_auto.set_sensitive(true);
-    }
-    #[cfg(not(feature = "autodetect"))]
-    {
-        btn_auto.set_sensitive(false);
-    }
+    btn_auto.set_sensitive(true);
 
     let margin_spin = gtk::SpinButton::builder()
         .adjustment(&gtk::Adjustment::new(0.0, -200.0, 200.0, 1.0, 10.0, 0.0))

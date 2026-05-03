@@ -18,8 +18,4 @@ pdf-writer.workspace = true
 dirs.workspace = true
 async-channel.workspace = true
 
-opencv = { version = "0.98", optional = true, default-features = false, features = ["imgproc", "imgcodecs"] }
-
-[features]
-default = []
-autodetect = ["dep:opencv"]
+opencv = { version = "0.98", default-features = false, features = ["imgproc", "imgcodecs"] }

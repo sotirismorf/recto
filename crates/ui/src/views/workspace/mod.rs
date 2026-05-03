@@ -25,7 +25,6 @@ use crate::widgets::zoom_pan::{ZoomPanConfig, ZoomPanController};
 use recto_core::{AppEvent, Command};
 
 use crate::views::workspace::crop::update_margin_spin;
-#[cfg(feature = "autodetect")]
 use crate::worker::JobQueue;
 use css::{load_preset_css, load_sidebar_css};
 use helpers::{
@@ -855,7 +854,6 @@ pub fn build(
     color::wire_color_handlers(&color_sidebar, state.clone());
 
     // ---- Auto Detect button (OpenCV) ---------------------------------------
-    #[cfg(feature = "autodetect")]
     {
         use crate::window::show_toast;
         use recto_core::{CropBox, Rotation};

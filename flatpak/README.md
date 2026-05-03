@@ -8,7 +8,8 @@ flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.f
 flatpak install flathub \
     org.gnome.Platform//50 \
     org.gnome.Sdk//50 \
-    org.freedesktop.Sdk.Extension.rust-stable//25.08
+    org.freedesktop.Sdk.Extension.rust-stable//25.08 \
+    org.freedesktop.Sdk.Extension.llvm20//25.08
 ```
 
 ## Build and install

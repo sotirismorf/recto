@@ -22,6 +22,3 @@ glib = "0.22"
 clap = { version = "4", features = ["derive"] }
 rayon.workspace = true
 image.workspace = true
-
-[features]
-autodetect = ["recto-core/autodetect"]

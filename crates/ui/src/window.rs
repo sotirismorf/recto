@@ -308,12 +308,10 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
                 after();
                 return;
             }
-            let dialog = adw::MessageDialog::builder()
-                .transient_for(&window)
-                .modal(true)
-                .heading("Save changes?")
-                .body("Your project has unsaved changes.")
-                .build();
+            let dialog = adw::AlertDialog::new(
+                Some("Save changes?"),
+                Some("Your project has unsaved changes."),
+            );
             dialog.add_response("discard", "Discard");
             dialog.add_response("cancel", "Cancel");
             dialog.add_response("save", "Save");
@@ -322,15 +320,14 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
             dialog.set_default_response(Some("save"));
             dialog.set_close_response("cancel");
             let save_now = save_now.clone();
-            dialog.connect_response(None, move |dlg, response| {
+            dialog.connect_response(None, move |_dlg, response| {
                 match response {
                     "discard" => after(),
                     "save" => save_now(Some(after.clone())),
                     _ => {}
                 }
-                dlg.close();
             });
-            dialog.present();
+            dialog.present(Some(&window));
         }) as Rc<dyn Fn(Rc<dyn Fn()>)>
     };
 
@@ -483,15 +480,10 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
     }
 }
 
-fn show_error_dialog(parent: &impl gtk::prelude::IsA<gtk::Window>, err: &AppError) {
-    let dialog = adw::MessageDialog::builder()
-        .transient_for(parent)
-        .modal(true)
-        .heading("Error")
-        .body(err.to_string())
-        .build();
+fn show_error_dialog(parent: &impl IsA<gtk::Widget>, err: &AppError) {
+    let dialog = adw::AlertDialog::new(Some("Error"), Some(&err.to_string()));
     dialog.add_response("ok", "OK");
     dialog.set_default_response(Some("ok"));
-    dialog.connect_response(None, |dlg, _| dlg.close());
-    dialog.present();
+    dialog.set_close_response("ok");
+    dialog.present(Some(parent));
 }

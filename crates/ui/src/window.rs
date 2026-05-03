@@ -114,6 +114,9 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         section.append(Some("Save As…"), Some("win.save-as"));
         section.append(Some("Export\u{2026}"), Some("win.export"));
         menu_model.append_section(None, &section);
+        let section = gio::Menu::new();
+        section.append(Some("About Recto"), Some("win.about"));
+        menu_model.append_section(None, &section);
     }
     let menu_btn = gtk::MenuButton::builder()
         .icon_name("open-menu-symbolic")
@@ -121,7 +124,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         .primary(true)
         .visible(false)
         .build();
-    header.pack_start(&menu_btn);
+    header.pack_end(&menu_btn);
 
     // ---- Stack: start page vs main work view ------------------------------
 
@@ -420,6 +423,28 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         });
     }
 
+    // win.about
+    let act_about = gio::SimpleAction::new("about", None);
+    {
+        let window = window.clone();
+        act_about.connect_activate(move |_, _| {
+            let about = adw::AboutWindow::builder()
+                .application_name("Recto")
+                .application_icon("io.github.sotirismorf.Recto")
+                .version("0.1.0")
+                .developer_name("Sotiris Morfakidis")
+                .comments("The powerful book scanning post-processor")
+                .license_type(gtk::License::Gpl30)
+                .website("https://github.com/sotirismorf/recto")
+                .issue_url("https://github.com/sotirismorf/recto/issues")
+                .developers(["Sotiris Morfakidis"].as_slice())
+                .copyright("© 2026 Sotiris Morfakidis")
+                .build();
+            about.set_transient_for(Some(&window));
+            about.present();
+        });
+    }
+
     let actions = gio::SimpleActionGroup::new();
     actions.add_action(&act_new);
     actions.add_action(&act_open);
@@ -428,6 +453,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
     actions.add_action(&act_export);
     actions.add_action(&act_undo);
     actions.add_action(&act_redo);
+    actions.add_action(&act_about);
     window.insert_action_group("win", Some(&actions));
 
     app.set_accels_for_action("win.save", &["<Primary>s"]);

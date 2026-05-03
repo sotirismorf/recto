@@ -456,12 +456,45 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
     actions.add_action(&act_about);
     window.insert_action_group("win", Some(&actions));
 
-    app.set_accels_for_action("win.save", &["<Primary>s"]);
-    app.set_accels_for_action("win.save-as", &["<Primary><Shift>s"]);
-    app.set_accels_for_action("win.new", &["<Primary>n"]);
-    app.set_accels_for_action("win.open", &["<Primary>o"]);
-    app.set_accels_for_action("win.undo", &["<Primary>z"]);
-    app.set_accels_for_action("win.redo", &["<Primary><Shift>z"]);
+    // ---- Keyboard shortcuts (ShortcutController) --------------------------
+    let sc = gtk::ShortcutController::new();
+    sc.add_shortcut(
+        gtk::Shortcut::builder()
+            .trigger(&gtk::ShortcutTrigger::parse_string("<Control>s").unwrap())
+            .action(&gtk::ShortcutAction::parse_string("action(win.save)").unwrap())
+            .build(),
+    );
+    sc.add_shortcut(
+        gtk::Shortcut::builder()
+            .trigger(&gtk::ShortcutTrigger::parse_string("<Control><Shift>s").unwrap())
+            .action(&gtk::ShortcutAction::parse_string("action(win.save-as)").unwrap())
+            .build(),
+    );
+    sc.add_shortcut(
+        gtk::Shortcut::builder()
+            .trigger(&gtk::ShortcutTrigger::parse_string("<Control>n").unwrap())
+            .action(&gtk::ShortcutAction::parse_string("action(win.new)").unwrap())
+            .build(),
+    );
+    sc.add_shortcut(
+        gtk::Shortcut::builder()
+            .trigger(&gtk::ShortcutTrigger::parse_string("<Control>o").unwrap())
+            .action(&gtk::ShortcutAction::parse_string("action(win.open)").unwrap())
+            .build(),
+    );
+    sc.add_shortcut(
+        gtk::Shortcut::builder()
+            .trigger(&gtk::ShortcutTrigger::parse_string("<Control>z").unwrap())
+            .action(&gtk::ShortcutAction::parse_string("action(win.undo)").unwrap())
+            .build(),
+    );
+    sc.add_shortcut(
+        gtk::Shortcut::builder()
+            .trigger(&gtk::ShortcutTrigger::parse_string("<Control><Shift>z").unwrap())
+            .action(&gtk::ShortcutAction::parse_string("action(win.redo)").unwrap())
+            .build(),
+    );
+    window.add_controller(sc);
 
     // ---- Close confirmation ----------------------------------------------
 

@@ -1,23 +1,26 @@
 use crate::domain::project::Project;
 use crate::domain::values::JpegQuality;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::io;
 use crate::io::config::PdfMeta;
 use crate::transform::{PipelineContext, transform_page};
 use image::{codecs::jpeg::JpegEncoder, DynamicImage};
 use rayon::prelude::*;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Export all pages as a single PDF with JPEG-encoded images.
 ///
 /// The `on_progress` callback receives `(done, total)` after each page.
 /// Metadata from [`PdfMeta`] is written into the PDF document info dictionary.
+/// Set `cancel` to `true` from another thread to abort the export early.
 pub fn export_to_pdf<F>(
     project: &Project,
     out_path: &Path,
     meta: &PdfMeta,
     jpeg_quality: JpegQuality,
+    cancel: Arc<AtomicBool>,
     on_progress: F,
 ) -> Result<()>
 where
@@ -28,11 +31,15 @@ where
     let total = project.pages.len();
     let done = AtomicUsize::new(0);
     let quality = jpeg_quality.as_u8();
+    on_progress(0, total);
 
     let jpeg_data: Vec<Result<(Vec<u8>, u32, u32)>> = project
         .pages
         .par_iter()
         .map(|page| {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(Error::Cancelled);
+            }
             let ctx = PipelineContext::from_page(project, page);
             let img = transform_page(&ctx)?;
             let (w, h) = (img.width(), img.height());
@@ -44,6 +51,12 @@ where
             Ok((jpeg, w, h))
         })
         .collect();
+
+    for result in &jpeg_data {
+        if let Err(Error::Cancelled) = result {
+            return Err(Error::Cancelled);
+        }
+    }
 
     let pages: Vec<(Vec<u8>, u32, u32)> = jpeg_data.into_iter().collect::<Result<_>>()?;
     let n = pages.len();

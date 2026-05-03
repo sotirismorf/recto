@@ -1,31 +1,39 @@
 use crate::domain::export::ExportSettings;
 use crate::domain::project::Project;
 use crate::domain::project::Page;
-use crate::error::Result;
+use crate::error::{Result, Error};
 use crate::io;
 use crate::transform::{PipelineContext, transform_page};
 use rayon::prelude::*;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Process every page in parallel, saving individual image files according to
 /// the project's [`ExportSettings`].
 ///
 /// The `on_progress` callback receives `(done, total)` after each page
 /// completes.  Returns one [`Result`] per page in order.
+/// Set `cancel` to `true` from another thread to abort the export early;
+/// pages already saved to disk before the cancel flag is observed will
+/// remain on disk.
 #[must_use]
-pub fn run_batch<F>(project: &Project, on_progress: F) -> Vec<Result<PathBuf>>
+pub fn run_batch<F>(project: &Project, cancel: Arc<AtomicBool>, on_progress: F) -> Vec<Result<PathBuf>>
 where
     F: Fn(usize, usize) + Sync + Send,
 {
     let total = project.pages.len();
     let done = AtomicUsize::new(0);
+    on_progress(0, total);
 
     project
         .pages
         .par_iter()
         .enumerate()
         .map(|(i, page)| {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(Error::Cancelled);
+            }
             let r = process_one(project, page, i + 1);
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             on_progress(n, total);

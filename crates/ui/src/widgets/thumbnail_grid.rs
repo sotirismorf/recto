@@ -14,6 +14,38 @@ use crate::types::PageId;
 pub const THUMB_PX: i32 = 150;
 pub const CARD_CHARS: i32 = 18;
 
+/// Key used to store the binding vector on each list item via GObject data.
+const BINDINGS_KEY: &str = "recto-prop-bindings";
+
+/// Attach two property bindings (thumbnail + filename) from `page` to the
+/// card widgets, storing them under `BINDINGS_KEY` on the list item so
+/// [`unbind_props`] can find and clean them up.
+fn bind_props(item: &gtk::ListItem, page: &PageItem, image: &gtk::Image, label: &gtk::Label) {
+    let b1 = page
+        .bind_property("thumbnail", image, "paintable")
+        .sync_create()
+        .build();
+    let b2 = page
+        .bind_property("filename", label, "label")
+        .sync_create()
+        .build();
+    let bindings = vec![b1, b2];
+    unsafe {
+        item.set_data(BINDINGS_KEY, bindings);
+    }
+}
+
+/// Release all property bindings for this list item.
+fn unbind_props(item: &gtk::ListItem) {
+    unsafe {
+        if let Some(bindings) = item.steal_data::<Vec<glib::Binding>>(BINDINGS_KEY) {
+            for b in bindings {
+                b.unbind();
+            }
+        }
+    }
+}
+
 /// One-time install of the photo-grid CSS for cell margin/padding.
 pub fn install_grid_css() {
     static ONCE: OnceLock<()> = OnceLock::new();
@@ -58,36 +90,6 @@ fn make_card() -> (gtk::Box, gtk::Image, gtk::Label) {
         .css_classes(["caption"])
         .build();
     (card, image, label)
-}
-
-fn bind_props(item: &gtk::ListItem, page: &PageItem, image: &gtk::Image, label: &gtk::Label) {
-    let b1 = page
-        .bind_property("thumbnail", image, "paintable")
-        .sync_create()
-        .build();
-    let b2 = page
-        .bind_property("filename", label, "label")
-        .sync_create()
-        .build();
-    // SAFETY: keys are unique to this module; bindings are released in
-    // unbind_props which GTK guarantees runs exactly once per item.
-    unsafe {
-        item.set_data("__b_thumb", b1);
-        item.set_data("__b_label", b2);
-    }
-}
-
-fn unbind_props(item: &gtk::ListItem) {
-    // SAFETY: keys match those set in bind_props; steal_data hands us
-    // ownership of the stored value, so dropping it is safe.
-    unsafe {
-        if let Some(b) = item.steal_data::<glib::Binding>("__b_thumb") {
-            b.unbind();
-        }
-        if let Some(b) = item.steal_data::<glib::Binding>("__b_label") {
-            b.unbind();
-        }
-    }
 }
 
 /// Factory for a grid where each thumbnail has a transparent overlay on top

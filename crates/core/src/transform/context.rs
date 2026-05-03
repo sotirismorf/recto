@@ -1,6 +1,6 @@
 use crate::domain::crop::CropBox;
 use crate::domain::export::OutputSize;
-use crate::domain::values::{Brightness, Contrast, Rotation};
+use crate::domain::values::{Brightness, Contrast, Rotation, Scale};
 use std::path::Path;
 
 /// Immutable snapshot of all parameters for one page's transform.
@@ -14,6 +14,7 @@ pub struct PipelineContext<'a> {
     pub output: Option<OutputSize>,
     pub brightness: Brightness,
     pub contrast: Contrast,
+    pub scale: Scale,
 }
 
 impl<'a> PipelineContext<'a> {
@@ -25,6 +26,7 @@ impl<'a> PipelineContext<'a> {
             output: page.output,
             brightness: project.brightness,
             contrast: project.contrast,
+            scale: project.export_scale,
         }
     }
 }

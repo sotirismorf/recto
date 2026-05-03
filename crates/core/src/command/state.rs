@@ -227,6 +227,11 @@ impl AppState {
                 vec![AppEvent::GlobalSettingsChanged]
             }
 
+            Command::SetExportScale(scale) => {
+                p.export_scale = *scale;
+                vec![AppEvent::GlobalSettingsChanged]
+            }
+
             Command::SetExportSettings(settings) => {
                 p.export = settings.clone();
                 vec![AppEvent::GlobalSettingsChanged]

@@ -19,7 +19,7 @@ pub fn transform_page(ctx: &PipelineContext) -> Result<DynamicImage> {
     let img = rotate::apply(img, ctx.rotation);
     let img = crop::apply(img, ctx.crop);
     let img = color::apply(img, ctx.brightness, ctx.contrast);
-    let img = resize::apply(img, ctx.output);
+    let img = resize::apply(img, ctx.output, ctx.scale);
     Ok(img)
 }
 

@@ -1,7 +1,7 @@
 use crate::domain::crop::CropPreset;
 use crate::domain::export::ExportSettings;
 use crate::domain::project::{Page, Project, CURRENT_SCHEMA};
-use crate::domain::values::{Brightness, Contrast, Rotation};
+use crate::domain::values::{Brightness, Contrast, Rotation, Scale};
 use crate::error::{Error, Result};
 use crate::io;
 use serde::Serialize;
@@ -19,6 +19,8 @@ struct ProjectView<'a> {
     brightness: Brightness,
     #[serde(default)]
     contrast: Contrast,
+    #[serde(default)]
+    export_scale: Scale,
 }
 
 #[derive(Serialize)]
@@ -65,6 +67,7 @@ pub fn save_project(project: &Project, file_path: &Path) -> Result<()> {
         prefix: &project.prefix,
         brightness: project.brightness,
         contrast: project.contrast,
+        export_scale: project.export_scale,
     };
     let json = serde_json::to_string_pretty(&view)?;
     io::write_atomic(file_path, json.as_bytes())
@@ -144,6 +147,7 @@ mod tests {
             prefix: "img".into(),
             brightness: Brightness::MAX,
             contrast: Contrast::MAX,
+            export_scale: Scale::new(0.5),
         };
 
         let proj_path = tmp.path().join("test.recto");

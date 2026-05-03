@@ -8,12 +8,33 @@ pub struct OutputSize {
     pub h: u32,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PdfCompression {
+    #[default]
+    Jpeg,
+    Flate,
+    Ccit,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "format", rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum ExportSettings {
-    Png,
+    Png { #[serde(default)] compression: u8 },
     Jpeg { quality: JpegQuality },
     Tiff,
-    Pdf { quality: JpegQuality },
+    #[serde(rename = "pdf")]
+    Pdf {
+        #[serde(default)]
+        compression: PdfCompression,
+        #[serde(default = "JpegQuality::default")]
+        quality: JpegQuality,
+    },
+}
+
+impl Default for ExportSettings {
+    fn default() -> Self {
+        Self::Png { compression: 3 }
+    }
 }

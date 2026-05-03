@@ -7,7 +7,7 @@ use gtk::{gio, glib};
 use crate::app::State;
 use crate::worker::JobQueue;
 use recto_core::{load_pdf_meta, save_pdf_meta};
-use recto_core::{Command, ExportSettings, JpegQuality, PdfMeta};
+use recto_core::{Command, ExportSettings, JpegQuality, PdfCompression, PdfMeta, Scale};
 
 enum ExportMsg {
     Progress(usize, usize),
@@ -19,8 +19,8 @@ pub fn show_export_dialog(state: State, parent: &gtk::Window, job_queue: Rc<JobQ
         .title("Export")
         .modal(true)
         .transient_for(parent)
-        .default_width(540)
-        .default_height(580)
+        .default_width(500)
+        .default_height(540)
         .resizable(false)
         .build();
     let header = adw::HeaderBar::new();
@@ -34,55 +34,10 @@ pub fn show_export_dialog(state: State, parent: &gtk::Window, job_queue: Rc<JobQ
 fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
     let (tx, rx) = async_channel::unbounded::<ExportMsg>();
 
-    // PDF metadata — loaded from ~/.config/recto/pdf_meta.json once.
     let pdf_meta: Rc<RefCell<PdfMeta>> = Rc::new(RefCell::new(load_pdf_meta()));
 
-    // --- Output directory row -----------------------------------------------
-    let dir_lbl = gtk::Label::builder()
-        .label("No directory chosen")
-        .ellipsize(gtk::pango::EllipsizeMode::Middle)
-        .xalign(0.0)
-        .hexpand(true)
-        .css_classes(["dim-label"])
-        .build();
-    {
-        let p = state.project();
-        if !p.output_dir.as_os_str().is_empty() {
-            dir_lbl.set_label(&p.output_dir.display().to_string());
-        }
-    }
-    let dir_btn = gtk::Button::builder()
-        .icon_name("folder-open-symbolic")
-        .tooltip_text("Choose output directory")
-        .build();
-
-    let dir_row = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .build();
-    dir_row.append(&gtk::Label::new(Some("Output Directory")));
-    dir_row.append(&dir_lbl);
-    dir_row.append(&dir_btn);
-
-    // --- Prefix row ---------------------------------------------------------
-    let prefix_entry = gtk::Entry::builder()
-        .text(state.project().prefix.as_str())
-        .placeholder_text("page")
-        .hexpand(true)
-        .build();
-
-    let prefix_row = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .build();
-    prefix_row.append(&gtk::Label::new(Some("Filename Prefix")));
-    prefix_row.append(&prefix_entry);
-
-    // --- Format toggle group ------------------------------------------------
-    let btn_jpeg = gtk::ToggleButton::builder()
-        .label("JPEG")
-        .active(true)
-        .build();
+    // --- Format toggle group --------------------------------------------------
+    let btn_jpeg = gtk::ToggleButton::builder().label("JPEG").active(true).build();
     let btn_png = gtk::ToggleButton::builder()
         .label("PNG")
         .group(&btn_jpeg)
@@ -100,7 +55,7 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
         let p = state.project();
         match p.export {
             ExportSettings::Jpeg { .. } => btn_jpeg.set_active(true),
-            ExportSettings::Png => btn_png.set_active(true),
+            ExportSettings::Png { .. } => btn_png.set_active(true),
             ExportSettings::Tiff => btn_tiff.set_active(true),
             ExportSettings::Pdf { .. } => btn_pdf.set_active(true),
             _ => {}
@@ -121,63 +76,206 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
         .orientation(gtk::Orientation::Horizontal)
         .spacing(8)
         .build();
-    format_row.append(&gtk::Label::new(Some("Format")));
+    format_row.append(&gtk::Label::builder().label("Format").xalign(1.0).width_request(80).build());
     format_row.append(&format_box);
 
-    // --- Quality slider (JPEG and PDF share it) -----------------------------
+    // --- PDF encoding sub-selector (visible when PDF is selected) -------------
+    let btn_pdf_jpeg = gtk::ToggleButton::builder().label("JPEG").active(true).build();
+    let btn_pdf_flate = gtk::ToggleButton::builder()
+        .label("Flate")
+        .group(&btn_pdf_jpeg)
+        .build();
+    let btn_pdf_ccit = gtk::ToggleButton::builder()
+        .label("CCITT")
+        .group(&btn_pdf_jpeg)
+        .build();
+
+    {
+        if let ExportSettings::Pdf { compression, .. } = state.project().export {
+            match compression {
+                PdfCompression::Jpeg => btn_pdf_jpeg.set_active(true),
+                PdfCompression::Flate => btn_pdf_flate.set_active(true),
+                PdfCompression::Ccit => btn_pdf_ccit.set_active(true),
+            }
+        }
+    }
+
+    let pdf_enc_box = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(0)
+        .css_classes(["linked"])
+        .build();
+    pdf_enc_box.append(&btn_pdf_jpeg);
+    pdf_enc_box.append(&btn_pdf_flate);
+    pdf_enc_box.append(&btn_pdf_ccit);
+
+    let pdf_enc_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .margin_start(80)
+        .build();
+    pdf_enc_row.append(&pdf_enc_box);
+
+    // --- Output directory row -------------------------------------------------
+    let dir_lbl = gtk::Label::builder()
+        .label("Choose directory\u{2026}")
+        .ellipsize(gtk::pango::EllipsizeMode::Middle)
+        .xalign(0.0)
+        .hexpand(true)
+        .css_classes(["dim-label"])
+        .build();
+    {
+        let p = state.project();
+        if !p.output_dir.as_os_str().is_empty() {
+            dir_lbl.set_label(&p.output_dir.display().to_string());
+        }
+    }
+    let dir_btn = gtk::Button::builder()
+        .icon_name("folder-open-symbolic")
+        .tooltip_text("Choose output directory")
+        .build();
+
+    let dir_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .build();
+    dir_row.append(&gtk::Label::builder().label("Output").xalign(1.0).width_request(80).build());
+    dir_row.append(&dir_lbl);
+    dir_row.append(&dir_btn);
+
+    // --- Filename prefix (image modes) ----------------------------------------
+    let prefix_entry = gtk::Entry::builder()
+        .text(state.project().prefix.as_str())
+        .placeholder_text("prefix")
+        .hexpand(true)
+        .width_request(140)
+        .build();
+
+    let suffix_lbl = gtk::Label::builder()
+        .label("_01.jpg")
+        .css_classes(["dim-label"])
+        .build();
+
+    let prefix_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .build();
+    prefix_row.append(&gtk::Label::builder().label("Prefix").xalign(1.0).width_request(80).build());
+    let prefix_input = gtk::Box::builder().orientation(gtk::Orientation::Horizontal).spacing(0).build();
+    prefix_input.append(&prefix_entry);
+    prefix_input.append(&suffix_lbl);
+    prefix_row.append(&prefix_input);
+
+    // --- Filename (PDF mode) ---------------------------------------------------
+    let pdf_name_entry = gtk::Entry::builder()
+        .text(state.project().prefix.as_str())
+        .placeholder_text("my_book")
+        .hexpand(true)
+        .width_request(140)
+        .build();
+
+    let pdf_name_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .build();
+    pdf_name_row.append(&gtk::Label::builder().label("Filename").xalign(1.0).width_request(80).build());
+    let pdf_name_input = gtk::Box::builder().orientation(gtk::Orientation::Horizontal).spacing(0).build();
+    pdf_name_input.append(&pdf_name_entry);
+    pdf_name_input.append(&gtk::Label::builder().label(".pdf").css_classes(["dim-label"]).build());
+    pdf_name_row.append(&pdf_name_input);
+
+    // --- PDF metadata button ---------------------------------------------------
+    let meta_btn = gtk::Button::builder()
+        .label("PDF Metadata\u{2026}")
+        .tooltip_text("Title, author, DPI, and other PDF properties")
+        .halign(gtk::Align::Start)
+        .margin_start(80)
+        .build();
+
+    // --- Quality slider (JPEG format and PDF+JPEG encoding) --------------------
     let quality_adj = gtk::Adjustment::new(85.0, 1.0, 100.0, 1.0, 10.0, 0.0);
     {
         match state.project().export {
-            ExportSettings::Jpeg { quality } | ExportSettings::Pdf { quality } => {
+            ExportSettings::Jpeg { quality } | ExportSettings::Pdf { quality, .. } => {
                 quality_adj.set_value(quality.as_u8() as f64);
             }
             _ => {}
         }
     }
     let quality_scale = gtk::Scale::new(gtk::Orientation::Horizontal, Some(&quality_adj));
-    quality_scale.set_width_request(180);
-    quality_scale.set_draw_value(true);
-    quality_scale.set_digits(0);
+    quality_scale.set_width_request(130);
+    quality_scale.set_draw_value(false);
+    let quality_spin = gtk::SpinButton::new(Some(&quality_adj), 1.0, 0);
+    quality_spin.set_width_request(70);
+    let quality_controls = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .build();
+    quality_controls.append(&quality_scale);
+    quality_controls.append(&quality_spin);
 
     let quality_row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(8)
         .build();
-    quality_row.append(&gtk::Label::new(Some("JPEG Quality")));
-    quality_row.append(&quality_scale);
+    quality_row.append(&gtk::Label::builder().label("Quality").xalign(1.0).width_request(80).build());
+    quality_row.append(&quality_controls);
 
-    // --- PDF metadata button (only visible when PDF is selected) ------------
-    let meta_btn = gtk::Button::builder()
-        .label("PDF Metadata…")
-        .tooltip_text("Edit title, author, DPI, and other PDF properties")
+    // --- PNG compression slider -----------------------------------------------
+    let png_comp_adj = gtk::Adjustment::new(3.0, 0.0, 9.0, 1.0, 2.0, 0.0);
+    {
+        if let ExportSettings::Png { compression } = state.project().export {
+            png_comp_adj.set_value(compression as f64);
+        }
+    }
+    let png_comp_scale = gtk::Scale::new(gtk::Orientation::Horizontal, Some(&png_comp_adj));
+    png_comp_scale.set_width_request(130);
+    png_comp_scale.set_draw_value(false);
+    let png_comp_spin = gtk::SpinButton::new(Some(&png_comp_adj), 1.0, 0);
+    png_comp_spin.set_width_request(70);
+    let png_comp_controls = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
         .build();
-    let meta_row = gtk::Box::builder()
+    png_comp_controls.append(&png_comp_scale);
+    png_comp_controls.append(&png_comp_spin);
+
+    let png_comp_row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(8)
         .build();
-    meta_row.append(&meta_btn);
+    png_comp_row.append(&gtk::Label::builder().label("Compr.").xalign(1.0).width_request(80).build());
+    png_comp_row.append(&png_comp_controls);
 
-    let is_pdf = btn_pdf.is_active();
-    quality_row.set_visible(btn_jpeg.is_active() || is_pdf);
-    meta_row.set_visible(is_pdf);
-
-    // --- Settings box -------------------------------------------------------
-    let settings_box = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(12)
-        .margin_top(24)
-        .margin_bottom(24)
-        .margin_start(48)
-        .margin_end(48)
-        .halign(gtk::Align::Fill)
+    // --- Scale slider ---------------------------------------------------------
+    let scale_adj = gtk::Adjustment::new(
+        (state.project().export_scale.as_f64() * 100.0).round(),
+        1.0,
+        100.0,
+        1.0,
+        10.0,
+        0.0,
+    );
+    let scale_slider = gtk::Scale::new(gtk::Orientation::Horizontal, Some(&scale_adj));
+    scale_slider.set_width_request(130);
+    scale_slider.set_draw_value(false);
+    let scale_spin = gtk::SpinButton::new(Some(&scale_adj), 1.0, 0);
+    scale_spin.set_width_request(70);
+    let scale_controls = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
         .build();
-    settings_box.append(&dir_row);
-    settings_box.append(&prefix_row);
-    settings_box.append(&format_row);
-    settings_box.append(&quality_row);
-    settings_box.append(&meta_row);
+    scale_controls.append(&scale_slider);
+    scale_controls.append(&scale_spin);
 
-    // --- Action area --------------------------------------------------------
+    let scale_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .build();
+    scale_row.append(&gtk::Label::builder().label("Scale").xalign(1.0).width_request(80).build());
+    scale_row.append(&scale_controls);
+
+    // --- Export button --------------------------------------------------------
     let export_btn = gtk::Button::builder()
         .label("Export")
         .css_classes(["suggested-action", "pill"])
@@ -199,7 +297,7 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
     let result_scroll = gtk::ScrolledWindow::builder()
         .child(&result_view)
         .vexpand(true)
-        .min_content_height(120)
+        .min_content_height(100)
         .build();
 
     let btn_row = gtk::Box::builder()
@@ -212,22 +310,70 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
     let action_box = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(8)
-        .margin_start(48)
-        .margin_end(48)
+        .margin_start(24)
+        .margin_end(24)
         .build();
     action_box.append(&btn_row);
     action_box.append(&progress);
     action_box.append(&result_scroll);
 
+    // --- Root assembly --------------------------------------------------------
     let root = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
+        .margin_top(18)
+        .margin_bottom(18)
         .build();
-    root.append(&settings_box);
+    root.append(&format_row);
+    root.append(&pdf_enc_row);
+    root.append(&dir_row);
+    root.append(&prefix_row);
+    root.append(&pdf_name_row);
+    root.append(&meta_btn);
+    root.append(&quality_row);
+    root.append(&png_comp_row);
+    root.append(&scale_row);
     root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     root.append(&action_box);
 
-    // --- Signal handlers ----------------------------------------------------
+    // --- Initial visibility ---------------------------------------------------
+    let update_visibility = {
+        let pdf_enc_row = pdf_enc_row.clone();
+        let prefix_row = prefix_row.clone();
+        let pdf_name_row = pdf_name_row.clone();
+        let meta_btn = meta_btn.clone();
+        let quality_row = quality_row.clone();
+        let png_comp_row = png_comp_row.clone();
+        let suffix_lbl = suffix_lbl.clone();
+        let btn_jpeg = btn_jpeg.clone();
+        let btn_png = btn_png.clone();
+        let btn_pdf = btn_pdf.clone();
+        let btn_pdf_jpeg = btn_pdf_jpeg.clone();
+        move || {
+            let is_jpeg = btn_jpeg.is_active();
+            let is_png = btn_png.is_active();
+            let is_pdf = btn_pdf.is_active();
+            let is_tiff = !is_jpeg && !is_png && !is_pdf;
+
+            pdf_enc_row.set_visible(is_pdf);
+            prefix_row.set_visible(!is_pdf);
+            pdf_name_row.set_visible(is_pdf);
+            meta_btn.set_visible(is_pdf);
+            quality_row.set_visible(is_jpeg || (is_pdf && btn_pdf_jpeg.is_active()));
+            png_comp_row.set_visible(is_png);
+
+            if is_jpeg {
+                suffix_lbl.set_label("_01.jpg");
+            } else if is_png {
+                suffix_lbl.set_label("_01.png");
+            } else if is_tiff {
+                suffix_lbl.set_label("_01.tiff");
+            }
+        }
+    };
+    update_visibility();
+
+    // --- Signal handlers ------------------------------------------------------
 
     dir_btn.connect_clicked({
         let state = state.clone();
@@ -249,25 +395,120 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
         }
     });
 
-    // Show/hide quality and metadata rows based on active format.
-    let update_rows_visibility = {
-        let quality_row = quality_row.clone();
-        let meta_row = meta_row.clone();
-        let btn_jpeg = btn_jpeg.clone();
-        let btn_pdf = btn_pdf.clone();
-        move || {
-            quality_row.set_visible(btn_jpeg.is_active() || btn_pdf.is_active());
-            meta_row.set_visible(btn_pdf.is_active());
-        }
-    };
-    for btn in [&btn_jpeg, &btn_png, &btn_tiff, &btn_pdf] {
+    // Format button handlers.
+    for (btn, settings) in [
+        (&btn_jpeg, ExportSettings::Jpeg { quality: JpegQuality::new(quality_adj.value() as u8) }),
+        (&btn_png, ExportSettings::Png { compression: png_comp_adj.value() as u8 }),
+        (&btn_tiff, ExportSettings::Tiff),
+    ] {
         btn.connect_toggled({
-            let f = update_rows_visibility.clone();
-            move |_| f()
+            let state = state.clone();
+            let update = update_visibility.clone();
+            let settings = settings.clone();
+            let quality_adj = quality_adj.clone();
+            let png_comp_adj = png_comp_adj.clone();
+            move |btn| {
+                if !btn.is_active() { return; }
+                update();
+                let s = match &settings {
+                    ExportSettings::Jpeg { quality: _ } => {
+                        ExportSettings::Jpeg { quality: JpegQuality::new(quality_adj.value() as u8) }
+                    }
+                    ExportSettings::Png { compression: _ } => {
+                        ExportSettings::Png { compression: png_comp_adj.value() as u8 }
+                    }
+                    ExportSettings::Tiff => ExportSettings::Tiff,
+                    _ => return,
+                };
+                state.dispatch(Command::SetExportSettings(s));
+            }
         });
     }
 
-    // PDF Metadata dialog.
+    // PDF format button handler.
+    btn_pdf.connect_toggled({
+        let state = state.clone();
+        let update = update_visibility.clone();
+        let quality_adj = quality_adj.clone();
+        let btn_pdf_jpeg = btn_pdf_jpeg.clone();
+        move |btn| {
+            if !btn.is_active() { return; }
+            update();
+            let compression = if btn_pdf_jpeg.is_active() {
+                PdfCompression::Jpeg
+            } else {
+                PdfCompression::Flate
+            };
+            state.dispatch(Command::SetExportSettings(ExportSettings::Pdf {
+                compression,
+                quality: JpegQuality::new(quality_adj.value() as u8),
+            }));
+        }
+    });
+
+    // PDF encoding sub-selector handlers.
+    for (btn, comp) in [
+        (&btn_pdf_jpeg, PdfCompression::Jpeg),
+        (&btn_pdf_flate, PdfCompression::Flate),
+        (&btn_pdf_ccit, PdfCompression::Ccit),
+    ] {
+        btn.connect_toggled({
+            let state = state.clone();
+            let update = update_visibility.clone();
+            let quality_adj = quality_adj.clone();
+            move |btn| {
+                if !btn.is_active() { return; }
+                update();
+                state.dispatch(Command::SetExportSettings(ExportSettings::Pdf {
+                    compression: comp,
+                    quality: JpegQuality::new(quality_adj.value() as u8),
+                }));
+            }
+        });
+    }
+
+    // Quality slider.
+    quality_adj.connect_notify_local(Some("value"), {
+        let state = state.clone();
+        let btn_jpeg = btn_jpeg.clone();
+        let btn_pdf = btn_pdf.clone();
+        let btn_pdf_jpeg = btn_pdf_jpeg.clone();
+        move |adj, _| {
+            if btn_jpeg.is_active() {
+                state.dispatch(Command::SetExportSettings(ExportSettings::Jpeg {
+                    quality: JpegQuality::new(adj.value() as u8),
+                }));
+            } else if btn_pdf.is_active() && btn_pdf_jpeg.is_active() {
+                state.dispatch(Command::SetExportSettings(ExportSettings::Pdf {
+                    compression: PdfCompression::Jpeg,
+                    quality: JpegQuality::new(adj.value() as u8),
+                }));
+            }
+        }
+    });
+
+    // PNG compression slider.
+    png_comp_adj.connect_notify_local(Some("value"), {
+        let state = state.clone();
+        let btn_png = btn_png.clone();
+        move |adj, _| {
+            if btn_png.is_active() {
+                state.dispatch(Command::SetExportSettings(ExportSettings::Png {
+                    compression: adj.value() as u8,
+                }));
+            }
+        }
+    });
+
+    // Scale slider.
+    scale_adj.connect_notify_local(Some("value"), {
+        let state = state.clone();
+        move |adj, _| {
+            state.dispatch(Command::SetExportScale(Scale::new(adj.value() / 100.0)));
+        }
+    });
+
+    // PDF metadata dialog.
     meta_btn.connect_clicked({
         let pdf_meta = pdf_meta.clone();
         move |btn| {
@@ -280,8 +521,7 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
     export_btn.connect_clicked({
         let state = state.clone();
         let prefix_entry = prefix_entry.clone();
-        let btn_jpeg = btn_jpeg.clone();
-        let btn_png = btn_png.clone();
+        let pdf_name_entry = pdf_name_entry.clone();
         let btn_pdf = btn_pdf.clone();
         let quality_adj = quality_adj.clone();
         let export_btn = export_btn.clone();
@@ -291,20 +531,12 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
         let pdf_meta = pdf_meta.clone();
         let job_queue = job_queue.clone();
         move |_| {
-            let quality = JpegQuality::new(quality_adj.value() as u8);
-            let format = if btn_jpeg.is_active() {
-                ExportSettings::Jpeg { quality }
-            } else if btn_png.is_active() {
-                ExportSettings::Png
-            } else if btn_pdf.is_active() {
-                ExportSettings::Pdf { quality }
-            } else {
-                ExportSettings::Tiff
-            };
-            {
-                state.dispatch(Command::SetPrefix(prefix_entry.text().to_string()));
-                state.dispatch(Command::SetExportSettings(format.clone()));
-            }
+            let prefix = prefix_entry.text().to_string();
+            let pdf_name = pdf_name_entry.text().to_string();
+            let is_pdf = btn_pdf.is_active();
+
+            state.dispatch(Command::SetPrefix(if is_pdf { pdf_name } else { prefix }));
+
             let project = state.project().clone();
 
             if project.pages.is_empty() {
@@ -325,8 +557,9 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
 
             let tx = tx.clone();
 
-            if matches!(format, ExportSettings::Pdf { .. }) {
+            if is_pdf {
                 let meta = pdf_meta.borrow().clone();
+                let quality = JpegQuality::new(quality_adj.value() as u8);
                 let out_path = project.output_dir.join(format!("{}.pdf", project.prefix));
                 let job_queue = job_queue.clone();
                 job_queue.spawn(move || {
@@ -377,6 +610,7 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
         }
     });
 
+    // Result receiver.
     glib::MainContext::default().spawn_local({
         let export_btn = export_btn.clone();
         async move {
@@ -393,11 +627,13 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
                         let total = lines.len();
                         let mut end = result_buf.end_iter();
                         for (success, msg) in &lines {
-                            let prefix = if *success { "✓ " } else { "✗ " };
+                            let prefix = if *success { "\u{2713} " } else { "\u{2717} " };
                             result_buf.insert(&mut end, &format!("{}{}\n", prefix, msg));
                         }
-                        result_buf
-                            .insert(&mut end, &format!("\nDone: {}/{} succeeded.\n", ok, total));
+                        result_buf.insert(
+                            &mut end,
+                            &format!("\nDone: {}/{} succeeded.\n", ok, total),
+                        );
                     }
                 }
             }

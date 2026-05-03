@@ -56,12 +56,14 @@ pub(crate) fn update_arrange_preview(
 }
 
 pub(crate) fn rotate_selected(sel: &gtk::MultiSelection, state: &State, delta: i32) {
-    let project = state.project();
     for pos in selected_positions(sel) {
-        let Some(page) = project.pages.get(pos as usize) else {
-            continue;
+        let new_deg = {
+            let project = state.project();
+            let Some(page) = project.pages.get(pos as usize) else {
+                continue;
+            };
+            (page.rotation.as_degrees() as i32 + delta).rem_euclid(360) as u16
         };
-        let new_deg = (page.rotation.as_degrees() as i32 + delta).rem_euclid(360) as u16;
         state.dispatch(Command::SetRotation {
             index: pos as usize,
             rotation: Rotation::new(new_deg),

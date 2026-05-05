@@ -1,3 +1,4 @@
+use crate::domain::export::ExportSettings;
 use crate::domain::project::Project;
 use crate::domain::values::JpegQuality;
 use crate::error::{Error, Result};
@@ -61,6 +62,11 @@ where
     let pages: Vec<(Vec<u8>, u32, u32)> = jpeg_data.into_iter().collect::<Result<_>>()?;
     let n = pages.len();
 
+    let page_height_mm = match project.export {
+        ExportSettings::Pdf { page_height_mm, .. } => page_height_mm,
+        _ => 0,
+    };
+
     let mut pdf = Pdf::new();
     let mut alloc = Ref::new(1);
     let catalog_ref = alloc.bump();
@@ -72,8 +78,15 @@ where
 
     for (i, (jpeg, w, h)) in pages.iter().enumerate() {
         let [img_ref, content_ref, page_ref] = refs[i];
-        let w_pt = *w as f64 * 72.0 / meta.dpi.as_f64();
-        let h_pt = *h as f64 * 72.0 / meta.dpi.as_f64();
+        let mut w_pt = *w as f64 * 72.0 / meta.dpi.as_f64();
+        let mut h_pt = *h as f64 * 72.0 / meta.dpi.as_f64();
+
+        if page_height_mm > 0 {
+            let target_h_pt = (page_height_mm as f64 * 72.0) / 25.4;
+            let scale = target_h_pt / h_pt;
+            h_pt = target_h_pt;
+            w_pt *= scale;
+        }
 
         pdf.image_xobject(img_ref, jpeg)
             .width(*w as i32)

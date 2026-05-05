@@ -148,6 +148,17 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
     scale_row.set_title("Scale");
     scale_row.set_subtitle("Percentage of original size");
 
+    // ---- Page height SpinRow (PDF only) ------------------------------------
+    let page_height_adj = gtk::Adjustment::new(0.0, 0.0, 5000.0, 1.0, 10.0, 0.0);
+    {
+        if let ExportSettings::Pdf { page_height_mm, .. } = &p.export {
+            page_height_adj.set_value(*page_height_mm as f64);
+        }
+    }
+    let page_height_row = adw::SpinRow::new(Some(&page_height_adj), 1.0, 0);
+    page_height_row.set_title("Page height (mm)");
+    page_height_row.set_subtitle("0 for original size");
+
     // ---- PreferencesGroup containers ---------------------------------------
     let output_group = adw::PreferencesGroup::builder().title("Format").build();
     output_group.add(&format_combo);
@@ -161,6 +172,7 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
     quality_group.add(&quality_row);
     quality_group.add(&png_comp_row);
     quality_group.add(&scale_row);
+    quality_group.add(&page_height_row);
 
     // ---- Export button + progress + result ----------------------------------
     let export_btn = gtk::Button::builder()
@@ -263,6 +275,7 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
         let meta_row = meta_row.clone();
         let quality_row = quality_row.clone();
         let png_comp_row = png_comp_row.clone();
+        let page_height_row = page_height_row.clone();
         move || {
             let pdf = is_pdf(&format_combo);
             pdf_enc_combo.set_visible(pdf);
@@ -272,6 +285,7 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
             quality_row
                 .set_visible(is_jpeg(&format_combo) || (pdf && pdf_enc_is_jpeg(&pdf_enc_combo)));
             png_comp_row.set_visible(is_png(&format_combo));
+            page_height_row.set_visible(pdf);
         }
     };
     update_visibility();
@@ -284,6 +298,7 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
         let update = update_visibility.clone();
         let quality_adj = quality_adj.clone();
         let png_comp_adj = png_comp_adj.clone();
+        let page_height_adj = page_height_adj.clone();
         let pdf_enc_combo = pdf_enc_combo.clone();
         move |combo| {
             update();
@@ -306,6 +321,7 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
                     ExportSettings::Pdf {
                         compression: enc,
                         quality: JpegQuality::new(quality_adj.value() as u8),
+                        page_height_mm: page_height_adj.value() as u32,
                     }
                 }
                 _ => return,
@@ -319,6 +335,7 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
         let state = state.clone();
         let update = update_visibility.clone();
         let quality_adj = quality_adj.clone();
+        let page_height_adj = page_height_adj.clone();
         move |combo| {
             update();
             let enc = match combo.selected() {
@@ -330,6 +347,7 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
             state.dispatch(Command::SetExportSettings(ExportSettings::Pdf {
                 compression: enc,
                 quality: JpegQuality::new(quality_adj.value() as u8),
+                page_height_mm: page_height_adj.value() as u32,
             }));
         }
     });
@@ -339,6 +357,7 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
         let state = state.clone();
         let format_combo = format_combo.clone();
         let pdf_enc_combo = pdf_enc_combo.clone();
+        let page_height_adj = page_height_adj.clone();
         move |adj| {
             let q = JpegQuality::new(adj.value() as u8);
             if is_jpeg(&format_combo) {
@@ -349,6 +368,7 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
                 state.dispatch(Command::SetExportSettings(ExportSettings::Pdf {
                     compression: PdfCompression::Jpeg,
                     quality: q,
+                    page_height_mm: page_height_adj.value() as u32,
                 }));
             }
         }
@@ -372,6 +392,26 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
         let state = state.clone();
         move |adj| {
             state.dispatch(Command::SetExportScale(Scale::new(adj.value() / 100.0)));
+        }
+    });
+
+    // Page height adjustment.
+    page_height_adj.connect_value_changed({
+        let state = state.clone();
+        let quality_adj = quality_adj.clone();
+        let pdf_enc_combo = pdf_enc_combo.clone();
+        move |adj| {
+            let enc = match pdf_enc_combo.selected() {
+                0 => PdfCompression::Jpeg,
+                1 => PdfCompression::Flate,
+                2 => PdfCompression::Ccit,
+                _ => PdfCompression::Jpeg,
+            };
+            state.dispatch(Command::SetExportSettings(ExportSettings::Pdf {
+                compression: enc,
+                quality: JpegQuality::new(quality_adj.value() as u8),
+                page_height_mm: adj.value() as u32,
+            }));
         }
     });
 

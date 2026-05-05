@@ -35,6 +35,8 @@ pub enum ExportSettings {
         compression: PdfCompression,
         #[serde(default = "JpegQuality::default")]
         quality: JpegQuality,
+        #[serde(default)]
+        page_height_mm: u32,
     },
 }
 

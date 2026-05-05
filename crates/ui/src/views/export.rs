@@ -9,8 +9,8 @@ use gtk::{gio, glib};
 use crate::app::State;
 use crate::worker::JobQueue;
 use recto_core::error::Error;
-use recto_core::{load_pdf_meta, save_pdf_meta};
-use recto_core::{Command, ExportSettings, JpegQuality, PdfCompression, PdfMeta, Scale};
+use recto_core::{load_config, save_config};
+use recto_core::{AppConfig, AppEvent, Command, ExportSettings, JpegQuality, PdfCompression, PdfMeta, Scale};
 
 enum ExportMsg {
     Progress(usize, usize),
@@ -29,16 +29,48 @@ pub fn show_export_dialog(state: State, parent: &gtk::Window, job_queue: Rc<JobQ
     let header = adw::HeaderBar::new();
     let toolbar_view = adw::ToolbarView::new();
     toolbar_view.add_top_bar(&header);
-    let content = build_export_content(state, job_queue);
+    let config = Rc::new(RefCell::new(load_config()));
+    {
+        let cfg = config.borrow();
+        state.dispatch_without_undo(Command::SetExportSettings(cfg.export.clone()));
+        state.dispatch_without_undo(Command::SetExportScale(cfg.export_scale));
+    }
+    let content = build_export_content(state, job_queue, config);
     toolbar_view.set_content(Some(&content));
     dialog.set_content(Some(&toolbar_view));
     dialog.present();
 }
 
-fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
+fn build_export_content(
+    state: State,
+    job_queue: Rc<JobQueue>,
+    config: Rc<RefCell<AppConfig>>,
+) -> gtk::Widget {
     let (tx, rx) = async_channel::unbounded::<ExportMsg>();
-    let pdf_meta: Rc<RefCell<PdfMeta>> = Rc::new(RefCell::new(load_pdf_meta()));
+    let pdf_meta = Rc::new(RefCell::new(config.borrow().pdf_meta.clone()));
     let p = state.project();
+
+    // ---- Auto-save settings to global config -------------------------------
+    {
+        let config = config.clone();
+        let state = state.clone();
+        let pdf_meta = pdf_meta.clone();
+        let settings_rx = state.subscribe();
+        glib::spawn_future_local(async move {
+            while let Ok(event) = settings_rx.recv().await {
+                if matches!(event, AppEvent::GlobalSettingsChanged) {
+                    let p = state.project();
+                    let mut cfg = config.borrow_mut();
+                    cfg.export = p.export.clone();
+                    cfg.export_scale = p.export_scale;
+                    cfg.pdf_meta = pdf_meta.borrow().clone();
+                    if let Err(e) = save_config(&cfg) {
+                        tracing::error!("Failed to auto-save config: {e}");
+                    }
+                }
+            }
+        });
+    }
 
     // ---- Format ComboRow ----------------------------------------------------
     let format_list = gtk::StringList::new(&["JPEG", "PNG", "TIFF", "PDF"]);
@@ -438,10 +470,11 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
 
     // PDF metadata button.
     meta_btn.connect_clicked({
+        let config = config.clone();
         let pdf_meta = pdf_meta.clone();
         move |btn| {
             let parent = btn.root().and_downcast::<gtk::Window>();
-            show_pdf_meta_dialog(parent, pdf_meta.clone());
+            show_pdf_meta_dialog(parent, config.clone(), pdf_meta.clone());
         }
     });
 
@@ -613,7 +646,11 @@ fn build_export_content(state: State, job_queue: Rc<JobQueue>) -> gtk::Widget {
     content_box.upcast()
 }
 
-fn show_pdf_meta_dialog(parent: Option<gtk::Window>, meta_rc: Rc<RefCell<PdfMeta>>) {
+fn show_pdf_meta_dialog(
+    parent: Option<gtk::Window>,
+    config: Rc<RefCell<AppConfig>>,
+    meta_rc: Rc<RefCell<PdfMeta>>,
+) {
     let dialog = adw::Window::builder()
         .title("PDF Metadata")
         .modal(true)
@@ -695,6 +732,7 @@ fn show_pdf_meta_dialog(parent: Option<gtk::Window>, meta_rc: Rc<RefCell<PdfMeta
 
     save_btn.connect_clicked({
         let dialog = dialog.clone();
+        let config = config.clone();
         let meta_rc = meta_rc.clone();
         let title_row = title_row.clone();
         let author_row = author_row.clone();
@@ -712,8 +750,12 @@ fn show_pdf_meta_dialog(parent: Option<gtk::Window>, meta_rc: Rc<RefCell<PdfMeta
                 m.keywords = keywords_row.text().to_string();
                 m.dpi = recto_core::Dpi::new(dpi_adj.value());
             }
-            if let Err(e) = save_pdf_meta(&meta_rc.borrow()) {
-                tracing::error!("save pdf meta: {e}");
+            {
+                let mut cfg = config.borrow_mut();
+                cfg.pdf_meta = meta_rc.borrow().clone();
+                if let Err(e) = save_config(&cfg) {
+                    tracing::error!("save config: {e}");
+                }
             }
             dialog.close();
         }

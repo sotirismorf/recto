@@ -11,7 +11,12 @@ use crate::widgets::page_item::PageItem;
 pub type State = Rc<AppState>;
 
 pub fn new_state() -> (State, async_channel::Receiver<AppEvent>) {
-    let (state, rx) = AppState::new(Project::default());
+    let mut project = Project::default();
+    let config = recto_core::load_config();
+    project.export = config.export;
+    project.export_scale = config.export_scale;
+
+    let (state, rx) = AppState::new(project);
     (Rc::new(state), rx)
 }
 

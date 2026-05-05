@@ -1,12 +1,11 @@
-use crate::domain::values::Dpi;
+use crate::domain::export::ExportSettings;
+use crate::domain::values::{Dpi, Scale};
 use crate::error::{Error, Result};
 use crate::io;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Metadata embedded into exported PDF files.
-///
-/// Persisted globally in the user's config directory, not per-project.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PdfMeta {
     #[serde(default)]
@@ -44,25 +43,57 @@ impl Default for PdfMeta {
     }
 }
 
-fn pdf_meta_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("recto").join("pdf_meta.json"))
+/// Global application configuration persisted in the user's config directory.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AppConfig {
+    #[serde(default)]
+    pub export: ExportSettings,
+    #[serde(default)]
+    pub export_scale: Scale,
+    #[serde(default)]
+    pub pdf_meta: PdfMeta,
 }
 
-/// Load persisted PDF metadata, falling back to [`PdfMeta::default`] if the file
-/// doesn't exist or is malformed.
-pub fn load_pdf_meta() -> PdfMeta {
-    pdf_meta_path()
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            export: ExportSettings::default(),
+            export_scale: Scale::default(),
+            pdf_meta: PdfMeta::default(),
+        }
+    }
+}
+
+fn config_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("recto").join("config.json"))
+}
+
+/// Load the global application configuration.
+pub fn load_config() -> AppConfig {
+    config_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+        .unwrap_or_else(|| {
+            // Fallback for transition from old pdf_meta.json
+            let meta_path = dirs::config_dir().map(|d| d.join("recto").join("pdf_meta.json"));
+            let meta = meta_path
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default();
+
+            AppConfig {
+                pdf_meta: meta,
+                ..Default::default()
+            }
+        })
 }
 
-/// Persist PDF metadata atomically to the user's config directory.
-pub fn save_pdf_meta(meta: &PdfMeta) -> Result<()> {
-    let path = pdf_meta_path().ok_or(Error::NoConfigDir)?;
+/// Save the global application configuration atomically.
+pub fn save_config(config: &AppConfig) -> Result<()> {
+    let path = config_path().ok_or(Error::NoConfigDir)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_string_pretty(meta)?;
+    let json = serde_json::to_string_pretty(config)?;
     io::write_atomic(&path, json.as_bytes())
 }

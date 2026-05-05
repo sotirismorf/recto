@@ -3,6 +3,7 @@ use std::cell::{Ref, RefCell};
 use crate::command::event::AppEvent;
 use crate::command::Command;
 use crate::domain::project::{Page, Project};
+use crate::io::config::load_config;
 
 /// Maximum number of undo entries kept in the ring buffer.
 const MAX_UNDO: usize = 50;
@@ -81,7 +82,11 @@ impl AppState {
     pub fn clear(&self) {
         self.push_undo();
         self.redo_stack.borrow_mut().clear();
-        *self.project.borrow_mut() = Project::default();
+        let mut project = Project::default();
+        let config = load_config();
+        project.export = config.export;
+        project.export_scale = config.export_scale;
+        *self.project.borrow_mut() = project;
         self.emit(AppEvent::ProjectCleared);
     }
 

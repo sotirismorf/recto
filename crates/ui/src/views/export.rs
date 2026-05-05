@@ -10,7 +10,9 @@ use crate::app::State;
 use crate::worker::JobQueue;
 use recto_core::error::Error;
 use recto_core::{load_config, save_config};
-use recto_core::{AppConfig, AppEvent, Command, ExportSettings, JpegQuality, PdfCompression, PdfMeta, Scale};
+use recto_core::{
+    AppConfig, AppEvent, Command, ExportSettings, JpegQuality, PdfCompression, PdfMeta, Scale,
+};
 
 enum ExportMsg {
     Progress(usize, usize),

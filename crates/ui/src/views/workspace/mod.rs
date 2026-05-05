@@ -441,6 +441,8 @@ pub fn build(
         let color_req = color_req.clone();
         let page_store = page_store.clone();
         let preview_arrange = preview_arrange.downgrade();
+        let preview_color = preview_color.downgrade();
+        let picker = Rc::downgrade(&picker);
         let preview_req = preview_req.clone();
         let current_mode = current_mode.clone();
         let count = count.clone();
@@ -510,9 +512,18 @@ pub fn build(
                     AppEvent::ProjectCleared => {
                         page_store.remove_all();
                         update_count(&count, &state);
+                        selection.unselect_all();
+
                         if let Some(preview) = preview_arrange.upgrade() {
                             preview_req.send_dummy();
                             preview.set_texture(None);
+                        }
+                        if let Some(preview) = preview_color.upgrade() {
+                            color_req.send_dummy();
+                            preview.set_texture(None);
+                        }
+                        if let Some(p) = picker.upgrade() {
+                            p.set_crop(None);
                         }
                         preview_stack.set_visible_child_name("empty");
                     }

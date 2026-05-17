@@ -82,6 +82,32 @@ impl Default for Contrast {
     }
 }
 
+/// Saturation in [-1.0, 1.0]. Clamped at construction.
+/// -1.0 = fully desaturated (grayscale), 0.0 = unchanged, 1.0 = doubly saturated.
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Saturation(f32);
+
+impl Saturation {
+    pub const ZERO: Self = Self(0.0);
+    pub const MIN: Self = Self(-1.0);
+    pub const MAX: Self = Self(1.0);
+
+    pub fn new(val: f32) -> Self {
+        Self(val.clamp(-1.0, 1.0))
+    }
+
+    pub fn as_f32(self) -> f32 {
+        self.0
+    }
+}
+
+impl Default for Saturation {
+    fn default() -> Self {
+        Self::ZERO
+    }
+}
+
 /// JPEG/PDF quality in [1, 100].
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -182,6 +208,13 @@ mod tests {
     fn contrast_clamps_to_range() {
         assert_eq!(Contrast::new(5.0), Contrast(1.0));
         assert_eq!(Contrast::new(-3.0), Contrast(-1.0));
+    }
+
+    #[test]
+    fn saturation_clamps_to_range() {
+        assert_eq!(Saturation::new(2.0), Saturation::MAX);
+        assert_eq!(Saturation::new(-5.0), Saturation::MIN);
+        assert_eq!(Saturation::new(0.25), Saturation(0.25));
     }
 
     #[test]

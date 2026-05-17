@@ -232,6 +232,11 @@ impl AppState {
                 vec![AppEvent::GlobalSettingsChanged]
             }
 
+            Command::SetSaturation(val) => {
+                p.saturation = *val;
+                vec![AppEvent::GlobalSettingsChanged]
+            }
+
             Command::SetExportScale(scale) => {
                 p.export_scale = *scale;
                 vec![AppEvent::GlobalSettingsChanged]

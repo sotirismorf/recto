@@ -2,7 +2,7 @@ use gtk::glib;
 use gtk::prelude::*;
 
 use crate::app::State;
-use recto_core::{Brightness, Command, Contrast};
+use recto_core::{Brightness, Command, Contrast, Saturation};
 
 use super::helpers::make_section;
 
@@ -10,28 +10,27 @@ pub struct ColorSidebar {
     pub controls: gtk::Box,
     pub brightness_scale: gtk::Scale,
     pub contrast_scale: gtk::Scale,
+    pub saturation_scale: gtk::Scale,
     pub reset_btn: gtk::Button,
 }
 
+fn make_adjustment_scale(initial: f64) -> gtk::Scale {
+    let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, -1.0, 1.0, 0.01);
+    scale.set_value(initial);
+    scale.set_draw_value(true);
+    scale.set_value_pos(gtk::PositionType::Right);
+    scale.set_digits(2);
+    scale.set_hexpand(true);
+    scale.add_mark(0.0, gtk::PositionType::Bottom, None);
+    scale
+}
+
 pub fn build_color_sidebar(state: &State) -> ColorSidebar {
-    let init_brightness = state.project().brightness.as_f32() as f64;
-    let init_contrast = state.project().contrast.as_f32() as f64;
-
-    let brightness_scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, -1.0, 1.0, 0.01);
-    brightness_scale.set_value(init_brightness);
-    brightness_scale.set_draw_value(true);
-    brightness_scale.set_value_pos(gtk::PositionType::Right);
-    brightness_scale.set_digits(2);
-    brightness_scale.set_hexpand(true);
-    brightness_scale.add_mark(0.0, gtk::PositionType::Bottom, None);
-
-    let contrast_scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, -1.0, 1.0, 0.01);
-    contrast_scale.set_value(init_contrast);
-    contrast_scale.set_draw_value(true);
-    contrast_scale.set_value_pos(gtk::PositionType::Right);
-    contrast_scale.set_digits(2);
-    contrast_scale.set_hexpand(true);
-    contrast_scale.add_mark(0.0, gtk::PositionType::Bottom, None);
+    let project = state.project();
+    let brightness_scale = make_adjustment_scale(project.brightness.as_f32() as f64);
+    let contrast_scale = make_adjustment_scale(project.contrast.as_f32() as f64);
+    let saturation_scale = make_adjustment_scale(project.saturation.as_f32() as f64);
+    drop(project);
 
     let reset_btn = gtk::Button::builder()
         .child(
@@ -40,12 +39,13 @@ pub fn build_color_sidebar(state: &State) -> ColorSidebar {
                 .label("Reset")
                 .build(),
         )
-        .tooltip_text("Reset brightness and contrast")
+        .tooltip_text("Reset brightness, contrast, and saturation")
         .build();
     reset_btn.add_css_class("flat");
 
     let brightness_section = make_section("Brightness", &brightness_scale);
     let contrast_section = make_section("Contrast", &contrast_scale);
+    let saturation_section = make_section("Saturation", &saturation_scale);
 
     let color_spacer = gtk::Box::builder().vexpand(true).build();
 
@@ -59,6 +59,7 @@ pub fn build_color_sidebar(state: &State) -> ColorSidebar {
         .build();
     color_controls.append(&brightness_section);
     color_controls.append(&contrast_section);
+    color_controls.append(&saturation_section);
     color_controls.append(&color_spacer);
     color_controls.append(&reset_btn);
 
@@ -66,6 +67,7 @@ pub fn build_color_sidebar(state: &State) -> ColorSidebar {
         controls: color_controls,
         brightness_scale,
         contrast_scale,
+        saturation_scale,
         reset_btn,
     }
 }
@@ -75,6 +77,7 @@ pub fn wire_color_handlers(sidebar: &ColorSidebar, state: State) {
     let s = state;
     let bs = sidebar.brightness_scale.clone();
     let cs = sidebar.contrast_scale.clone();
+    let ss = sidebar.saturation_scale.clone();
 
     sidebar.brightness_scale.connect_value_changed(glib::clone!(
         #[strong]
@@ -94,6 +97,14 @@ pub fn wire_color_handlers(sidebar: &ColorSidebar, state: State) {
         }
     ));
 
+    sidebar.saturation_scale.connect_value_changed(glib::clone!(
+        #[strong]
+        s,
+        move |scale| {
+            s.dispatch(Command::SetSaturation(Saturation::new(scale.value() as f32)));
+        }
+    ));
+
     sidebar.reset_btn.connect_clicked(glib::clone!(
         #[strong]
         s,
@@ -101,11 +112,15 @@ pub fn wire_color_handlers(sidebar: &ColorSidebar, state: State) {
         bs,
         #[weak]
         cs,
+        #[weak]
+        ss,
         move |_| {
             s.dispatch(Command::SetBrightness(Brightness::ZERO));
             s.dispatch(Command::SetContrast(Contrast::ZERO));
+            s.dispatch(Command::SetSaturation(Saturation::ZERO));
             bs.set_value(0.0);
             cs.set_value(0.0);
+            ss.set_value(0.0);
         }
     ));
 }

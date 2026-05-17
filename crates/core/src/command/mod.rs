@@ -6,7 +6,7 @@ pub use state::AppState;
 
 use crate::domain::crop::{CropBox, CropPreset};
 use crate::domain::export::{ExportSettings, OutputSize};
-use crate::domain::values::{Brightness, Contrast, Rotation, Scale};
+use crate::domain::values::{Brightness, Contrast, Rotation, Saturation, Scale};
 use std::path::PathBuf;
 
 /// Every mutation to the project is expressed as a [`Command`].
@@ -39,6 +39,7 @@ pub enum Command {
     },
     SetBrightness(Brightness),
     SetContrast(Contrast),
+    SetSaturation(Saturation),
     SetExportScale(Scale),
     SetExportSettings(ExportSettings),
     SetOutputDir(PathBuf),

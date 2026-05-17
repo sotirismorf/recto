@@ -18,7 +18,7 @@ pub fn transform_page(ctx: &PipelineContext) -> Result<DynamicImage> {
     let img = exif::correct_orientation(img, ctx.source_path);
     let img = rotate::apply(img, ctx.rotation);
     let img = crop::apply(img, ctx.crop);
-    let img = color::apply(img, ctx.brightness, ctx.contrast);
+    let img = color::apply(img, ctx.brightness, ctx.contrast, ctx.saturation);
     let img = resize::apply(img, ctx.output, ctx.scale);
     Ok(img)
 }
@@ -30,7 +30,7 @@ pub fn transform_page_preview(ctx: &PipelineContext) -> Result<DynamicImage> {
     let img = exif::correct_orientation(img, ctx.source_path);
     let img = rotate::apply(img, ctx.rotation);
     let img = crop::apply(img, ctx.crop);
-    let img = color::apply(img, ctx.brightness, ctx.contrast);
+    let img = color::apply(img, ctx.brightness, ctx.contrast, ctx.saturation);
     Ok(img)
 }
 
@@ -40,7 +40,7 @@ mod tests {
     use crate::domain::crop::CropBox;
     use crate::domain::export::OutputSize;
     use crate::domain::project::{Page, Project};
-    use crate::domain::values::{Brightness, Contrast};
+    use crate::domain::values::{Brightness, Contrast, Saturation};
 
     #[test]
     fn transform_page_smoke() {
@@ -76,6 +76,7 @@ mod tests {
         let project = Project {
             brightness: Brightness::MAX,
             contrast: Contrast::MAX,
+            saturation: Saturation::MAX,
             ..Project::default()
         };
         let page = Page {

@@ -1,7 +1,7 @@
 use crate::domain::crop::CropPreset;
 use crate::domain::export::ExportSettings;
 use crate::domain::project::{Page, Project, CURRENT_SCHEMA};
-use crate::domain::values::{Brightness, Contrast, Rotation, Scale};
+use crate::domain::values::{Brightness, Contrast, Rotation, Saturation, Scale};
 use crate::error::{Error, Result};
 use crate::io;
 use serde::Serialize;
@@ -19,6 +19,8 @@ struct ProjectView<'a> {
     brightness: Brightness,
     #[serde(default)]
     contrast: Contrast,
+    #[serde(default)]
+    saturation: Saturation,
     #[serde(default)]
     export_scale: Scale,
 }
@@ -67,6 +69,7 @@ pub fn save_project(project: &Project, file_path: &Path) -> Result<()> {
         prefix: &project.prefix,
         brightness: project.brightness,
         contrast: project.contrast,
+        saturation: project.saturation,
         export_scale: project.export_scale,
     };
     let json = serde_json::to_string_pretty(&view)?;
@@ -111,7 +114,7 @@ mod tests {
     use crate::domain::crop::{CropBox, CropPreset};
     use crate::domain::export::{ExportSettings, OutputSize};
     use crate::domain::project::Page;
-    use crate::domain::values::{Brightness, Contrast, JpegQuality};
+    use crate::domain::values::{Brightness, Contrast, JpegQuality, Saturation};
 
     #[test]
     fn project_round_trip_save_load() {
@@ -147,6 +150,7 @@ mod tests {
             prefix: "img".into(),
             brightness: Brightness::MAX,
             contrast: Contrast::MAX,
+            saturation: Saturation::new(-0.5),
             export_scale: Scale::new(0.5),
         };
 
@@ -176,6 +180,7 @@ mod tests {
         );
         assert_eq!(loaded.brightness, Brightness::MAX);
         assert_eq!(loaded.contrast, Contrast::MAX);
+        assert_eq!(loaded.saturation, Saturation::new(-0.5));
     }
 
     #[test]

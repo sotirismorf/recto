@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use crate::domain::crop::{CropBox, CropPreset};
 use crate::domain::export::{ExportSettings, OutputSize};
-use crate::domain::values::{Brightness, Contrast, Rotation, Scale};
+use crate::domain::values::{Brightness, Contrast, Rotation, Saturation, Scale};
 
 pub const CURRENT_SCHEMA: u32 = 1;
 
@@ -51,6 +51,8 @@ pub struct Project {
     #[serde(default)]
     pub contrast: Contrast,
     #[serde(default)]
+    pub saturation: Saturation,
+    #[serde(default)]
     pub export_scale: Scale,
 }
 
@@ -65,6 +67,7 @@ impl Default for Project {
             prefix: "page".into(),
             brightness: Brightness::ZERO,
             contrast: Contrast::ZERO,
+            saturation: Saturation::ZERO,
             export_scale: Scale::FULL,
         }
     }

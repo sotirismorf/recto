@@ -5,7 +5,7 @@ use gtk::{gdk_pixbuf, glib};
 use image::DynamicImage;
 
 use crate::latest::RequestDedup;
-use recto_core::{Brightness, Contrast, CropBox, Project};
+use recto_core::{Brightness, Contrast, CropBox, Project, Saturation};
 
 pub(crate) fn pixbuf_to_dynamic_image(pb: &gdk_pixbuf::Pixbuf) -> DynamicImage {
     let w = pb.width() as u32;
@@ -48,6 +48,7 @@ pub(crate) struct ColorReq {
     crop: Option<CropBox>,
     brightness: Brightness,
     contrast: Contrast,
+    saturation: Saturation,
 }
 
 pub(crate) struct ColorResult {
@@ -80,6 +81,7 @@ pub(crate) fn send_preview_req(
         crop: page.crop,
         brightness: project.brightness,
         contrast: project.contrast,
+        saturation: project.saturation,
     });
 }
 
@@ -99,7 +101,7 @@ pub(crate) fn render_preview(req: &ColorReq) -> Option<ColorResult> {
     };
     let pb = scale_down(pb, 2048);
     let img = pixbuf_to_dynamic_image(&pb);
-    let img = recto_core::transform::color::apply(img, req.brightness, req.contrast);
+    let img = recto_core::transform::color::apply(img, req.brightness, req.contrast, req.saturation);
     let pb = dynamic_image_to_pixbuf(&img);
     Some(ColorResult {
         bytes: pb.read_pixel_bytes(),

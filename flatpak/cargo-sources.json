@@ -1718,27 +1718,27 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/opencv/opencv-0.98.2.crate",
-        "sha256": "0c607a407be5ff2484f55d2eb289bffd01de84f962779b8470e76f035dd3563d",
-        "dest": "cargo/vendor/opencv-0.98.2"
+        "url": "https://static.crates.io/crates/opencv/opencv-0.99.0.crate",
+        "sha256": "e64a4ee03d2ec18c19d62b7fa4f570840c424853343ac085a9e3cedc60d88c4b",
+        "dest": "cargo/vendor/opencv-0.99.0"
     },
     {
         "type": "inline",
-        "contents": "{\"package\": \"0c607a407be5ff2484f55d2eb289bffd01de84f962779b8470e76f035dd3563d\", \"files\": {}}",
-        "dest": "cargo/vendor/opencv-0.98.2",
+        "contents": "{\"package\": \"e64a4ee03d2ec18c19d62b7fa4f570840c424853343ac085a9e3cedc60d88c4b\", \"files\": {}}",
+        "dest": "cargo/vendor/opencv-0.99.0",
         "dest-filename": ".cargo-checksum.json"
     },
     {
         "type": "archive",
         "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/opencv-binding-generator/opencv-binding-generator-0.101.0.crate",
-        "sha256": "833f00c6deee8dd615249af42fa35ff030c5c73ee3c13e44baf1135a4d57af86",
-        "dest": "cargo/vendor/opencv-binding-generator-0.101.0"
+        "url": "https://static.crates.io/crates/opencv-binding-generator/opencv-binding-generator-0.102.0.crate",
+        "sha256": "d6df5c8a6b61606e5581388ce115393f14691d9bbb1756a364c559d94a466405",
+        "dest": "cargo/vendor/opencv-binding-generator-0.102.0"
     },
     {
         "type": "inline",
-        "contents": "{\"package\": \"833f00c6deee8dd615249af42fa35ff030c5c73ee3c13e44baf1135a4d57af86\", \"files\": {}}",
-        "dest": "cargo/vendor/opencv-binding-generator-0.101.0",
+        "contents": "{\"package\": \"d6df5c8a6b61606e5581388ce115393f14691d9bbb1756a364c559d94a466405\", \"files\": {}}",
+        "dest": "cargo/vendor/opencv-binding-generator-0.102.0",
         "dest-filename": ".cargo-checksum.json"
     },
     {
@@ -2324,6 +2324,19 @@
         "type": "inline",
         "contents": "{\"package\": \"0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64\", \"files\": {}}",
         "dest": "cargo/vendor/shlex-1.3.0",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/shlex/shlex-2.0.1.crate",
+        "sha256": "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba",
+        "dest": "cargo/vendor/shlex-2.0.1"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba\", \"files\": {}}",
+        "dest": "cargo/vendor/shlex-2.0.1",
         "dest-filename": ".cargo-checksum.json"
     },
     {

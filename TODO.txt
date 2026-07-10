@@ -1,0 +1,4 @@
+- add curvers section in colors.
+- it remembers things, instead of remembering, set presets. the presets should
+  be in popup window. like gimp be able to set presets
+- for some reason double clicking on txt files opens in recto on my computer

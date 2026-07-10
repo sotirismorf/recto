@@ -303,6 +303,12 @@ impl CropPicker {
         self.area.queue_draw();
     }
 
+    /// Redraw the overlay without changing state (e.g. after a global
+    /// setting such as bleed changed).
+    pub fn queue_redraw(&self) {
+        self.area.queue_draw();
+    }
+
     pub fn bind(&self, state: State, index: usize) {
         let (path, rotation, crop) = {
             let project = state.project();
@@ -541,6 +547,12 @@ impl CropPicker {
             })
             .unwrap_or((0.18, 0.6, 1.0));
 
+        let bleed = s
+            .binding
+            .as_ref()
+            .map(|(state, _)| state.project().bleed.as_u32() as f64)
+            .unwrap_or(0.0);
+
         let (z, px, py) = self.canvas.transform();
 
         let ix = px;
@@ -552,11 +564,51 @@ impl CropPicker {
         let rw = rect.w * z;
         let rh = rect.h * z;
 
+        // Bleed rectangle: crop expanded by the bleed, clamped to the image.
+        let bx = px + (rect.x - bleed).max(0.0) * z;
+        let by = py + (rect.y - bleed).max(0.0) * z;
+        let bw = px + (rect.x + rect.w + bleed).min(iw) * z - bx;
+        let bh = py + (rect.y + rect.h + bleed).min(ih) * z - by;
+        let has_bleed = bleed > 0.0 && (bw > rw || bh > rh);
+
+        // Dim everything outside the bleed rect (outside the crop rect when
+        // there is no bleed).
         cr.set_source_rgba(0.0, 0.0, 0.0, 0.45);
         cr.set_fill_rule(gtk::cairo::FillRule::EvenOdd);
         cr.rectangle(ix, iy, iw_w, ih_w);
-        cr.rectangle(rx, ry, rw, rh);
+        if has_bleed {
+            cr.rectangle(bx, by, bw, bh);
+        } else {
+            cr.rectangle(rx, ry, rw, rh);
+        }
         let _ = cr.fill();
+
+        // Hatch the bleed band: kept in the PDF but hidden by its crop box.
+        if has_bleed {
+            cr.save().ok();
+            cr.set_fill_rule(gtk::cairo::FillRule::EvenOdd);
+            cr.rectangle(bx, by, bw, bh);
+            cr.rectangle(rx, ry, rw, rh);
+            cr.clip();
+            cr.set_source_rgba(cr_r, cr_g, cr_b, 0.45);
+            cr.set_line_width(1.0);
+            let spacing = 8.0;
+            let mut c = bx - bh;
+            while c < bx + bw {
+                cr.move_to(c, by + bh);
+                cr.line_to(c + bh, by);
+                c += spacing;
+            }
+            let _ = cr.stroke();
+            cr.restore().ok();
+
+            cr.set_source_rgba(cr_r, cr_g, cr_b, 0.6);
+            cr.set_line_width(1.0);
+            cr.set_dash(&[4.0, 4.0], 0.0);
+            cr.rectangle(bx, by, bw, bh);
+            let _ = cr.stroke();
+            cr.set_dash(&[], 0.0);
+        }
 
         cr.set_source_rgba(cr_r, cr_g, cr_b, 1.0);
         cr.set_line_width(2.0);

@@ -160,6 +160,35 @@ impl Default for Scale {
     }
 }
 
+/// Bleed margin in source-image pixels, added around each crop for PDF
+/// export only. Hidden by the PDF page crop box. Clamped to [0, 2000].
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Bleed(u32);
+
+impl Bleed {
+    pub const ZERO: Self = Self(0);
+    pub const MAX: Self = Self(2000);
+
+    pub fn new(val: u32) -> Self {
+        Self(val.min(Self::MAX.0))
+    }
+
+    pub fn as_u32(self) -> u32 {
+        self.0
+    }
+
+    pub fn is_zero(self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl Default for Bleed {
+    fn default() -> Self {
+        Self::ZERO
+    }
+}
+
 /// Dots per inch for PDF rendering. Clamped to [1, 2400].
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -222,6 +251,15 @@ mod tests {
         assert_eq!(JpegQuality::new(0), JpegQuality(1));
         assert_eq!(JpegQuality::new(200), JpegQuality(100));
         assert_eq!(JpegQuality::new(85), JpegQuality(85));
+    }
+
+    #[test]
+    fn bleed_clamps() {
+        assert_eq!(Bleed::new(0), Bleed::ZERO);
+        assert_eq!(Bleed::new(5000), Bleed::MAX);
+        assert_eq!(Bleed::new(20), Bleed(20));
+        assert!(Bleed::ZERO.is_zero());
+        assert!(!Bleed::new(1).is_zero());
     }
 
     #[test]

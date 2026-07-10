@@ -7,7 +7,7 @@ use gtk::prelude::*;
 use crate::app::State;
 use crate::widgets::crop_picker::CropPicker;
 use crate::widgets::preset_chips::PresetCallbacks;
-use recto_core::{Command, CropBox, CropPreset, Rect};
+use recto_core::{Bleed, Command, CropBox, CropPreset, Rect};
 
 #[derive(Clone)]
 pub struct CropSidebar {
@@ -18,10 +18,12 @@ pub struct CropSidebar {
     pub margin_spin: gtk::SpinButton,
     pub last_margin: std::rc::Rc<std::cell::Cell<f64>>,
     pub is_updating: std::rc::Rc<std::cell::Cell<bool>>,
+    pub bleed_spin: gtk::SpinButton,
+    pub bleed_updating: std::rc::Rc<std::cell::Cell<bool>>,
     pub status_lbl: gtk::Label,
 }
 
-pub fn build_crop_sidebar() -> CropSidebar {
+pub fn build_crop_sidebar(state: &State) -> CropSidebar {
     let preset_chips = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(4)
@@ -83,6 +85,41 @@ pub fn build_crop_sidebar() -> CropSidebar {
     margin_section.append(&margin_label);
     margin_section.append(&margin_spin);
 
+    let bleed_spin = gtk::SpinButton::builder()
+        .adjustment(&gtk::Adjustment::new(
+            state.project().bleed.as_u32() as f64,
+            0.0,
+            2000.0,
+            1.0,
+            10.0,
+            0.0,
+        ))
+        .climb_rate(1.0)
+        .digits(0)
+        .numeric(true)
+        .update_policy(gtk::SpinButtonUpdatePolicy::IfValid)
+        .tooltip_text(
+            "Extra pixels kept around each crop in PDF export only. \
+             Hidden by the PDF page crop box; does not affect image exports \
+             or the crop rectangles.",
+        )
+        .build();
+
+    let bleed_updating = std::rc::Rc::new(std::cell::Cell::new(false));
+
+    let bleed_label = gtk::Label::builder()
+        .label("PDF Bleed (px)")
+        .xalign(0.0)
+        .css_classes(["caption"])
+        .build();
+
+    let bleed_section = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .build();
+    bleed_section.append(&bleed_label);
+    bleed_section.append(&bleed_spin);
+
     let presets_section = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(4)
@@ -112,6 +149,7 @@ pub fn build_crop_sidebar() -> CropSidebar {
         .build();
     crop_controls.append(&presets_section);
     crop_controls.append(&margin_section);
+    crop_controls.append(&bleed_section);
     crop_controls.append(&btn_auto);
     crop_controls.append(&btn_new);
 
@@ -123,8 +161,22 @@ pub fn build_crop_sidebar() -> CropSidebar {
         margin_spin,
         last_margin,
         is_updating,
+        bleed_spin,
+        bleed_updating,
         status_lbl,
     }
+}
+
+/// Sync the bleed spin with the project without re-dispatching a command.
+/// Called on undo/redo and project load.
+pub(crate) fn sync_bleed_spin(sidebar: &CropSidebar, state: &State) {
+    let value = state.project().bleed.as_u32() as f64;
+    if (sidebar.bleed_spin.value() - value).abs() < f64::EPSILON {
+        return;
+    }
+    sidebar.bleed_updating.set(true);
+    sidebar.bleed_spin.set_value(value);
+    sidebar.bleed_updating.set(false);
 }
 
 /// Set the margin spin sensitivity based on the current selection state.
@@ -249,6 +301,25 @@ pub fn wire_crop_handlers(
         }
         crate::widgets::crop_overlay::update_status_label(&sl, &s, Some(idx));
     });
+
+    // ---- Bleed handler -------------------------------------------------------
+    {
+        let s_b = s_m.clone();
+        let pk_b = pk_m.clone();
+        let bleed_updating = sidebar.bleed_updating.clone();
+
+        sidebar.bleed_spin.connect_value_changed(move |spin| {
+            if bleed_updating.get() {
+                return;
+            }
+            let bleed = Bleed::new(spin.value() as u32);
+            if s_b.project().bleed == bleed {
+                return;
+            }
+            s_b.dispatch(Command::SetBleed(bleed));
+            pk_b.queue_redraw();
+        });
+    }
 
     // ---- Crop margin handler ------------------------------------------------
     {

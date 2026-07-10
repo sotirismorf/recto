@@ -1,7 +1,7 @@
 use crate::domain::crop::CropPreset;
 use crate::domain::export::ExportSettings;
 use crate::domain::project::{Page, Project, CURRENT_SCHEMA};
-use crate::domain::values::{Brightness, Contrast, Rotation, Saturation, Scale};
+use crate::domain::values::{Bleed, Brightness, Contrast, Rotation, Saturation, Scale};
 use crate::error::{Error, Result};
 use crate::io;
 use serde::Serialize;
@@ -23,6 +23,8 @@ struct ProjectView<'a> {
     saturation: Saturation,
     #[serde(default)]
     export_scale: Scale,
+    #[serde(default)]
+    bleed: Bleed,
 }
 
 #[derive(Serialize)]
@@ -71,6 +73,7 @@ pub fn save_project(project: &Project, file_path: &Path) -> Result<()> {
         contrast: project.contrast,
         saturation: project.saturation,
         export_scale: project.export_scale,
+        bleed: project.bleed,
     };
     let json = serde_json::to_string_pretty(&view)?;
     io::write_atomic(file_path, json.as_bytes())
@@ -152,6 +155,7 @@ mod tests {
             contrast: Contrast::MAX,
             saturation: Saturation::new(-0.5),
             export_scale: Scale::new(0.5),
+            bleed: Bleed::new(24),
         };
 
         let proj_path = tmp.path().join("test.recto");
@@ -181,6 +185,7 @@ mod tests {
         assert_eq!(loaded.brightness, Brightness::MAX);
         assert_eq!(loaded.contrast, Contrast::MAX);
         assert_eq!(loaded.saturation, Saturation::new(-0.5));
+        assert_eq!(loaded.bleed, Bleed::new(24));
     }
 
     #[test]
@@ -214,5 +219,6 @@ mod tests {
         std::fs::write(&proj_path, json).unwrap();
         let project = load_project(&proj_path).unwrap();
         assert_eq!(project.version, 1);
+        assert_eq!(project.bleed, Bleed::ZERO);
     }
 }

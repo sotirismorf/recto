@@ -242,6 +242,11 @@ impl AppState {
                 vec![AppEvent::GlobalSettingsChanged]
             }
 
+            Command::SetBleed(val) => {
+                p.bleed = *val;
+                vec![AppEvent::GlobalSettingsChanged]
+            }
+
             Command::SetExportSettings(settings) => {
                 p.export = settings.clone();
                 vec![AppEvent::GlobalSettingsChanged]
@@ -316,7 +321,7 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::values::{Brightness, Rotation};
+    use crate::domain::values::{Bleed, Brightness, Rotation};
     use std::path::PathBuf;
 
     fn project_with_page() -> Project {
@@ -336,6 +341,16 @@ mod tests {
         assert_eq!(state.project().pages.len(), 2);
         let event = rx.try_recv().unwrap();
         assert_eq!(event, AppEvent::PagesAdded(vec![0, 1]));
+    }
+
+    #[test]
+    fn set_bleed_emits_global_settings_and_undoes() {
+        let (state, rx) = AppState::new(Project::default());
+        state.dispatch(Command::SetBleed(Bleed::new(20)));
+        assert_eq!(state.project().bleed, Bleed::new(20));
+        assert_eq!(rx.try_recv().unwrap(), AppEvent::GlobalSettingsChanged);
+        assert!(state.undo());
+        assert_eq!(state.project().bleed, Bleed::ZERO);
     }
 
     #[test]

@@ -1,1 +1,16 @@
+# Rust build output
 /target
+
+# Flatpak build artifacts
+/.flatpak-builder/
+/build-dir/
+/flatpak-repo/
+*.flatpak
+
+# Recto project files saved into the repo while testing
+*.recto
+
+# Editor/OS junk
+*.swp
+*~
+.DS_Store

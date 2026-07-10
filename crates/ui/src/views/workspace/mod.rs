@@ -149,8 +149,12 @@ pub fn build(
         });
 
     let (color_preview_svc, color_req, rx_color_res) =
-        PreviewService::<ColorReq, crate::widgets::color_preview::ColorResult>::new(|_id, req| {
-            crate::widgets::color_preview::render_preview(&req)
+        PreviewService::<ColorReq, crate::widgets::color_preview::ColorResult>::new({
+            // Lives on the single preview worker thread; RefCell is safe here.
+            let cache = RefCell::new(crate::widgets::color_preview::BaseCache::default());
+            move |_id, req| {
+                crate::widgets::color_preview::render_preview(&req, &mut cache.borrow_mut())
+            }
         });
 
     load_preset_css();
@@ -523,6 +527,8 @@ pub fn build(
                         page_store.remove_all();
                         update_count(&count, &state);
                         selection.unselect_all();
+                        crop::sync_bleed_spin(&crop_sidebar, &state);
+                        color::sync_color_scales(&color_sidebar, &state);
 
                         if let Some(preview) = preview_arrange.upgrade() {
                             preview_req.send_dummy();

@@ -2,3 +2,9 @@
 - it remembers things, instead of remembering, set presets. the presets should
   be in popup window. like gimp be able to set presets
 - for some reason double clicking on txt files opens in recto on my computer
+- explore DNN-based page detection: OpenCV 5's rewritten dnn module (~80% ONNX
+  operator coverage, CPU-only engine) makes it feasible to run a small document
+  segmentation model instead of the Otsu+Canny heuristics in autodetect.rs.
+  Would handle hard cases (dark pages on dark backgrounds, hands in frame)
+  much better. Costs: ship a model file, enable the "dnn" feature of the
+  opencv crate, bigger flatpak.

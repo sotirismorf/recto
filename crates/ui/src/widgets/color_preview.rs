@@ -42,6 +42,10 @@ pub(crate) fn dynamic_image_to_pixbuf(img: &DynamicImage) -> gdk_pixbuf::Pixbuf 
     )
 }
 
+/// Common GL implementations cap textures at 16384px per side; anything
+/// larger would fail to upload. Below that, the preview is full resolution.
+const MAX_PREVIEW_PX: i32 = 16384;
+
 pub(crate) struct ColorReq {
     path: PathBuf,
     rotation: u32,
@@ -49,6 +53,29 @@ pub(crate) struct ColorReq {
     brightness: Brightness,
     contrast: Contrast,
     saturation: Saturation,
+}
+
+/// Worker-side cache of the decoded, oriented, rotated, and cropped image.
+/// Color adjustments are cheap compared to decoding a full scan, so keeping
+/// the base pixels lets slider drags skip everything but the color math.
+#[derive(Default)]
+pub(crate) struct BaseCache {
+    entry: Option<(PathBuf, u32, Option<CropBox>, DynamicImage)>,
+}
+
+impl BaseCache {
+    fn get(&self, req: &ColorReq) -> Option<&DynamicImage> {
+        self.entry
+            .as_ref()
+            .filter(|(path, rotation, crop, _)| {
+                *path == req.path && *rotation == req.rotation && *crop == req.crop
+            })
+            .map(|(_, _, _, img)| img)
+    }
+
+    fn put(&mut self, req: &ColorReq, img: DynamicImage) {
+        self.entry = Some((req.path.clone(), req.rotation, req.crop, img));
+    }
 }
 
 pub(crate) struct ColorResult {
@@ -85,24 +112,31 @@ pub(crate) fn send_preview_req(
     });
 }
 
-pub(crate) fn render_preview(req: &ColorReq) -> Option<ColorResult> {
-    let pb = gdk_pixbuf::Pixbuf::from_file(&req.path).ok()?;
-    let pb = pb.apply_embedded_orientation().unwrap_or(pb);
-    let pb = crate::widgets::page_item::rotate(&pb, req.rotation);
-    let pb = match req.crop {
-        Some(c) => {
-            let x = (c.x as i32).min(pb.width().saturating_sub(1));
-            let y = (c.y as i32).min(pb.height().saturating_sub(1));
-            let w = (c.w as i32).min(pb.width() - x).max(1);
-            let h = (c.h as i32).min(pb.height() - y).max(1);
-            pb.new_subpixbuf(x, y, w, h)
+pub(crate) fn render_preview(req: &ColorReq, cache: &mut BaseCache) -> Option<ColorResult> {
+    let base = match cache.get(req) {
+        Some(img) => img.clone(),
+        None => {
+            let pb = gdk_pixbuf::Pixbuf::from_file(&req.path).ok()?;
+            let pb = pb.apply_embedded_orientation().unwrap_or(pb);
+            let pb = crate::widgets::page_item::rotate(&pb, req.rotation);
+            let pb = match req.crop {
+                Some(c) => {
+                    let x = (c.x as i32).min(pb.width().saturating_sub(1));
+                    let y = (c.y as i32).min(pb.height().saturating_sub(1));
+                    let w = (c.w as i32).min(pb.width() - x).max(1);
+                    let h = (c.h as i32).min(pb.height() - y).max(1);
+                    pb.new_subpixbuf(x, y, w, h)
+                }
+                None => pb,
+            };
+            let pb = scale_down(pb, MAX_PREVIEW_PX);
+            let img = pixbuf_to_dynamic_image(&pb);
+            cache.put(req, img.clone());
+            img
         }
-        None => pb,
     };
-    let pb = scale_down(pb, 2048);
-    let img = pixbuf_to_dynamic_image(&pb);
     let img =
-        recto_core::transform::color::apply(img, req.brightness, req.contrast, req.saturation);
+        recto_core::transform::color::apply(base, req.brightness, req.contrast, req.saturation);
     let pb = dynamic_image_to_pixbuf(&img);
     Some(ColorResult {
         bytes: pb.read_pixel_bytes(),

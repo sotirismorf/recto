@@ -20,27 +20,75 @@ pub struct CropCluster {
     pub page_indices: Vec<usize>,
 }
 
-/// Detects the visible page boundary in a single image.
-/// Returns the detected CropBox and the dimensions of the rotated image.
-fn detect_single_fast(path: &Path, page_rotation: Rotation) -> Option<(CropBox, (u32, u32))> {
-    // 1. Load directly into OpenCV Mat (Grayscale)
+/// Decode `path` as grayscale, letting the codec skip resolution we would
+/// discard anyway: for JPEG the `IMREAD_REDUCED_*` flags decode at 1/2–1/8
+/// scale inside libjpeg (DCT scaling), which is far cheaper than a full
+/// decode followed by a resize. Other formats fall back gracefully.
+///
+/// Returns the decoded Mat plus the exact original dimensions in the same
+/// (EXIF-corrected) frame as the decoded pixels. `imread` applies EXIF
+/// orientation, so when the header dimensions come out axis-swapped relative
+/// to the decode we swap them to match.
+fn imread_gray_reduced(path: &Path) -> Option<(Mat, u32, u32)> {
     let path_str = path.to_str()?;
-    let src_gray = imgcodecs::imread(path_str, imgcodecs::IMREAD_GRAYSCALE).ok()?;
-    if src_gray.empty() {
+
+    // Header-only read for the exact pre-decode dimensions (cheap, no pixels).
+    let raw_dims = image::image_dimensions(path).ok();
+
+    let flag = match raw_dims {
+        Some((w, h)) => {
+            let max_dim = w.max(h);
+            if max_dim >= PROCESSING_SIZE * 8 {
+                imgcodecs::IMREAD_REDUCED_GRAYSCALE_8
+            } else if max_dim >= PROCESSING_SIZE * 4 {
+                imgcodecs::IMREAD_REDUCED_GRAYSCALE_4
+            } else if max_dim >= PROCESSING_SIZE * 2 {
+                imgcodecs::IMREAD_REDUCED_GRAYSCALE_2
+            } else {
+                imgcodecs::IMREAD_GRAYSCALE
+            }
+        }
+        None => imgcodecs::IMREAD_GRAYSCALE,
+    };
+
+    let decoded = imgcodecs::imread(path_str, flag).ok()?;
+    if decoded.empty() {
         return None;
     }
 
-    let orig_w = src_gray.cols();
-    let orig_h = src_gray.rows();
+    let (orig_w, orig_h) = match raw_dims {
+        Some((raw_w, raw_h)) => {
+            // Reduced decode preserves the landscape/portrait ordering, so a
+            // flipped ordering means imread applied an axis-swapping EXIF
+            // orientation — report the original dimensions in that frame.
+            let landscape_raw = raw_w >= raw_h;
+            let landscape_decoded = decoded.cols() >= decoded.rows();
+            if landscape_raw == landscape_decoded {
+                (raw_w, raw_h)
+            } else {
+                (raw_h, raw_w)
+            }
+        }
+        None => (decoded.cols() as u32, decoded.rows() as u32),
+    };
 
-    // 2. Fast downscale using OpenCV
+    Some((decoded, orig_w, orig_h))
+}
+
+/// Detects the visible page boundary in a single image.
+/// Returns the detected CropBox and the dimensions of the rotated image.
+fn detect_single_fast(path: &Path, page_rotation: Rotation) -> Option<(CropBox, (u32, u32))> {
+    // 1. Load into an OpenCV Mat (grayscale), reduced during decode if possible.
+    let (src_gray, orig_w, orig_h) = imread_gray_reduced(path)?;
+
+    // 2. Fast downscale for whatever resolution the codec couldn't skip.
     // We downscale while maintaining aspect ratio to keep processing under 1s per page.
-    let scale = (PROCESSING_SIZE as f64 / orig_w.max(orig_h) as f64).min(1.0);
+    let scale = (PROCESSING_SIZE as f64 / src_gray.cols().max(src_gray.rows()) as f64).min(1.0);
     let mut small_gray = Mat::default();
     if scale < 1.0 {
         let new_size = core::Size::new(
-            (orig_w as f64 * scale) as i32,
-            (orig_h as f64 * scale) as i32,
+            (src_gray.cols() as f64 * scale) as i32,
+            (src_gray.rows() as f64 * scale) as i32,
         );
         imgproc::resize(
             &src_gray,
@@ -256,19 +304,23 @@ fn detect_single_fast(path: &Path, page_rotation: Rotation) -> Option<(CropBox, 
 
     // 8. Map back to original (un-downscaled) coordinates.
     let (final_w, final_h) = if matches!(page_rotation, Rotation::DEG90 | Rotation::DEG270) {
-        (orig_h as u32, orig_w as u32)
+        (orig_h, orig_w)
     } else {
-        (orig_w as u32, orig_h as u32)
+        (orig_w, orig_h)
     };
 
     let crop = best_candidate
         .map(|(_, rect)| {
-            let inv_scale = 1.0 / scale;
+            // Per-axis scale from the actual processed dimensions back to the
+            // original: exact regardless of how the codec rounded the reduced
+            // decode or how the downscale truncated.
+            let inv_x = final_w as f64 / d_cols as f64;
+            let inv_y = final_h as f64 / d_rows as f64;
             CropBox {
-                x: ((rect.x as f64 * inv_scale) as u32).min(final_w.saturating_sub(1)),
-                y: ((rect.y as f64 * inv_scale) as u32).min(final_h.saturating_sub(1)),
-                w: ((rect.width as f64 * inv_scale) as u32).min(final_w),
-                h: ((rect.height as f64 * inv_scale) as u32).min(final_h),
+                x: ((rect.x as f64 * inv_x) as u32).min(final_w.saturating_sub(1)),
+                y: ((rect.y as f64 * inv_y) as u32).min(final_h.saturating_sub(1)),
+                w: ((rect.width as f64 * inv_x) as u32).min(final_w),
+                h: ((rect.height as f64 * inv_y) as u32).min(final_h),
             }
         })
         .unwrap_or(CropBox {
@@ -285,7 +337,18 @@ fn detect_single_fast(path: &Path, page_rotation: Rotation) -> Option<(CropBox, 
 pub fn detect_all_pages(paths: &[(usize, &Path, Rotation)]) -> Vec<(usize, CropBox, u32, u32)> {
     tracing::info!("autodetect: starting detection on {} pages", paths.len());
 
-    paths
+    // Rayon already saturates the cores with one page per worker; letting each
+    // OpenCV call spin up its own internal thread pool on top oversubscribes.
+    // Keep OpenCV single-threaded while a multi-page batch runs, then restore.
+    let prev_threads = if paths.len() > 1 {
+        let prev = core::get_num_threads().unwrap_or(0);
+        let _ = core::set_num_threads(1);
+        Some(prev)
+    } else {
+        None
+    };
+
+    let results = paths
         .par_iter()
         .filter_map(|&(idx, path, rotation)| {
             let (crop, (w, h)) = detect_single_fast(path, rotation).unwrap_or_else(|| {
@@ -315,7 +378,13 @@ pub fn detect_all_pages(paths: &[(usize, &Path, Rotation)]) -> Vec<(usize, CropB
 
             Some((idx, crop, w, h))
         })
-        .collect()
+        .collect();
+
+    if let Some(prev) = prev_threads {
+        let _ = core::set_num_threads(prev);
+    }
+
+    results
 }
 
 /// Groups detected crop boxes into clusters based on aspect ratio and area similarity.

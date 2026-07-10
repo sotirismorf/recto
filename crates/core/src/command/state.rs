@@ -71,16 +71,20 @@ impl AppState {
     }
 
     /// Replace the entire project (used for load / reset).
-    /// The old project is pushed to the undo stack.
+    /// Undo history is discarded: undoing across a project boundary would
+    /// resurrect the previous project under the new session path.
     pub fn load_project(&self, project: Project) {
-        self.push_undo();
+        self.undo_stack.borrow_mut().clear();
         self.redo_stack.borrow_mut().clear();
         *self.project.borrow_mut() = project;
         self.emit(AppEvent::ProjectLoaded);
     }
 
+    /// Reset to a fresh project. Discards undo history like [`load_project`].
+    ///
+    /// [`load_project`]: Self::load_project
     pub fn clear(&self) {
-        self.push_undo();
+        self.undo_stack.borrow_mut().clear();
         self.redo_stack.borrow_mut().clear();
         let mut project = Project::default();
         let config = load_config();
@@ -90,7 +94,7 @@ impl AppState {
         self.emit(AppEvent::ProjectCleared);
     }
 
-    /// Undo the last [`dispatch`] / [`load_project`] / [`clear`].
+    /// Undo the last [`dispatch`].
     /// Returns `true` if an undo step was available.
     pub fn undo(&self) -> bool {
         let snapshot = match self.undo_stack.borrow_mut().pop() {
@@ -190,36 +194,46 @@ impl AppState {
                 if *from < len && *to < len && from != to {
                     let page = p.pages.remove(*from);
                     p.pages.insert(*to, page);
+                    vec![AppEvent::ProjectChanged]
+                } else {
+                    vec![]
                 }
-                vec![]
             }
 
             Command::SetRotation { index, rotation } => {
                 if let Some(page) = p.pages.get_mut(*index) {
                     page.rotation = *rotation;
+                    vec![AppEvent::PageChanged(*index)]
+                } else {
+                    vec![]
                 }
-                vec![AppEvent::PageChanged(*index)]
             }
 
             Command::SetCrop { index, crop } => {
                 if let Some(page) = p.pages.get_mut(*index) {
                     page.crop = *crop;
+                    vec![AppEvent::PageChanged(*index)]
+                } else {
+                    vec![]
                 }
-                vec![AppEvent::PageChanged(*index)]
             }
 
             Command::SetCropPreset { index, preset } => {
                 if let Some(page) = p.pages.get_mut(*index) {
                     page.crop_preset = *preset;
+                    vec![AppEvent::PageChanged(*index)]
+                } else {
+                    vec![]
                 }
-                vec![AppEvent::PageChanged(*index)]
             }
 
             Command::SetOutputSize { index, size } => {
                 if let Some(page) = p.pages.get_mut(*index) {
                     page.output = *size;
+                    vec![AppEvent::PageChanged(*index)]
+                } else {
+                    vec![]
                 }
-                vec![AppEvent::PageChanged(*index)]
             }
 
             Command::SetBrightness(val) => {
@@ -474,13 +488,43 @@ mod tests {
     }
 
     #[test]
-    fn clear_is_undoable() {
+    fn clear_discards_undo_history() {
         let (state, _rx) = AppState::new(project_with_page());
+        state.dispatch(Command::SetRotation {
+            index: 0,
+            rotation: Rotation::DEG90,
+        });
         state.clear();
         assert!(state.project().pages.is_empty());
-        drop(state.project());
-        assert!(state.undo());
-        assert_eq!(state.project().pages.len(), 2);
+        assert!(!state.can_undo());
+        assert!(!state.undo());
+    }
+
+    #[test]
+    fn load_project_discards_undo_history() {
+        let (state, _rx) = AppState::new(project_with_page());
+        state.dispatch(Command::SetRotation {
+            index: 0,
+            rotation: Rotation::DEG90,
+        });
+        state.load_project(Project::default());
+        assert!(!state.can_undo());
+        assert!(!state.redo());
+    }
+
+    #[test]
+    fn reorder_pages_moves_page_and_emits() {
+        let (state, rx) = AppState::new(project_with_page());
+        state.dispatch(Command::ReorderPages { from: 0, to: 1 });
+        assert_eq!(state.project().pages[1].path, PathBuf::from("a.png"));
+        assert_eq!(rx.try_recv().unwrap(), AppEvent::ProjectChanged);
+    }
+
+    #[test]
+    fn reorder_pages_oob_emits_nothing() {
+        let (state, rx) = AppState::new(project_with_page());
+        state.dispatch(Command::ReorderPages { from: 0, to: 5 });
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

@@ -32,7 +32,10 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
     let selection = gtk::MultiSelection::new(Some(page_store.clone().upcast::<gio::ListModel>()));
     let paned_sync = views::PanedSync::new();
 
-    // Dirty tracker: subscribes to all mutation events and marks the session dirty.
+    // Dirty tracker: subscribes to mutation events and marks the session dirty.
+    // ProjectLoaded / ProjectCleared are excluded: they start a clean session,
+    // and their initiators manage the dirty flag synchronously — marking here
+    // would race and re-dirty the session right after open/new.
     {
         let session = session.clone();
         let dirty_rx = state.subscribe();
@@ -44,11 +47,10 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
                     | AppEvent::PageChanged(_)
                     | AppEvent::GlobalSettingsChanged
                     | AppEvent::PresetsChanged
-                    | AppEvent::ProjectLoaded
-                    | AppEvent::ProjectChanged
-                    | AppEvent::ProjectCleared => {
+                    | AppEvent::ProjectChanged => {
                         session.mark_dirty();
                     }
+                    AppEvent::ProjectLoaded | AppEvent::ProjectCleared => {}
                 }
             }
         });
@@ -235,7 +237,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         Rc::new(move |path: PathBuf| -> bool {
             let mut path = path;
             if path.extension().is_none() {
-                path = path.with_extension("pcut");
+                path = path.with_extension("recto");
             }
             let project = session.state().project().clone();
             match recto_core::io::project::save_project(&project, &path) {
@@ -534,18 +536,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
     window.present();
 
     if let Some(path) = project_path {
-        match recto_core::io::project::load_project(&path) {
-            Ok(project) => {
-                load_project(project);
-                session.set_path(Some(&path));
-                session.clear_dirty();
-                enter_main();
-            }
-            Err(e) => {
-                tracing::error!("Failed to load project {:?}: {}", path, e);
-                show_error_dialog(&window, &AppError::ProjectLoad(e.into()));
-            }
-        }
+        on_project(path);
     }
 }
 

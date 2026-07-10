@@ -10,6 +10,9 @@
 # Recto project files saved into the repo while testing
 *.recto
 
+# Local dev notes, kept out of the repo
+/TODO.txt
+
 # Editor/OS junk
 *.swp
 *~

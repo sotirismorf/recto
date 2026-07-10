@@ -101,7 +101,8 @@ pub(crate) fn render_preview(req: &ColorReq) -> Option<ColorResult> {
     };
     let pb = scale_down(pb, 2048);
     let img = pixbuf_to_dynamic_image(&pb);
-    let img = recto_core::transform::color::apply(img, req.brightness, req.contrast, req.saturation);
+    let img =
+        recto_core::transform::color::apply(img, req.brightness, req.contrast, req.saturation);
     let pb = dynamic_image_to_pixbuf(&img);
     Some(ColorResult {
         bytes: pb.read_pixel_bytes(),

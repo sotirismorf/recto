@@ -446,6 +446,7 @@ pub fn build(
         let preview_req = preview_req.clone();
         let current_mode = current_mode.clone();
         let crop_sidebar = crop_sidebar.clone();
+        let color_sidebar = color_sidebar.clone();
         let count = count.clone();
         let spinner = spinner.clone();
         let pending_tasks = pending_tasks.clone();
@@ -500,6 +501,7 @@ pub fn build(
                     }
                     AppEvent::ProjectLoaded => {
                         crop::sync_bleed_spin(&crop_sidebar, &state);
+                        color::sync_color_scales(&color_sidebar, &state);
                         let n = state.project().pages.len();
                         let indices: Vec<usize> = (0..n).collect();
                         let items = projector_on_pages_added(&page_store, &state, &indices);
@@ -539,10 +541,17 @@ pub fn build(
                         sync_page_metadata(&page_store, &state);
                         update_count(&count, &state);
                         crop::sync_bleed_spin(&crop_sidebar, &state);
+                        color::sync_color_scales(&color_sidebar, &state);
                         if current_mode.get() == Mode::Arrange {
                             if let Some(preview) = preview_arrange.upgrade() {
                                 update_arrange_preview(&selection, &preview, &preview_req);
                             }
+                        }
+                        if current_mode.get() == Mode::Color {
+                            let project = state.project();
+                            crate::widgets::color_preview::send_preview_req(
+                                &project, &selection, &color_req,
+                            );
                         }
                         if current_mode.get() == Mode::Crop {
                             if let Some(p) = picker.upgrade() {

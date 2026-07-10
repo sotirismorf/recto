@@ -1,3 +1,6 @@
+use std::cell::Cell;
+use std::rc::Rc;
+
 use gtk::glib;
 use gtk::prelude::*;
 
@@ -6,12 +9,14 @@ use recto_core::{Brightness, Command, Contrast, Saturation};
 
 use super::helpers::make_section;
 
+#[derive(Clone)]
 pub struct ColorSidebar {
     pub controls: gtk::Box,
     pub brightness_scale: gtk::Scale,
     pub contrast_scale: gtk::Scale,
     pub saturation_scale: gtk::Scale,
     pub reset_btn: gtk::Button,
+    pub updating: Rc<Cell<bool>>,
 }
 
 fn make_adjustment_scale(initial: f64) -> gtk::Scale {
@@ -69,7 +74,26 @@ pub fn build_color_sidebar(state: &State) -> ColorSidebar {
         contrast_scale,
         saturation_scale,
         reset_btn,
+        updating: Rc::new(Cell::new(false)),
     }
+}
+
+/// Sync the scales with the project without re-dispatching commands.
+/// Called on project load and undo/redo.
+pub(crate) fn sync_color_scales(sidebar: &ColorSidebar, state: &State) {
+    let (b, c, s) = {
+        let project = state.project();
+        (
+            project.brightness.as_f32() as f64,
+            project.contrast.as_f32() as f64,
+            project.saturation.as_f32() as f64,
+        )
+    };
+    sidebar.updating.set(true);
+    sidebar.brightness_scale.set_value(b);
+    sidebar.contrast_scale.set_value(c);
+    sidebar.saturation_scale.set_value(s);
+    sidebar.updating.set(false);
 }
 
 /// Wire the color-mode signal handlers.
@@ -78,11 +102,17 @@ pub fn wire_color_handlers(sidebar: &ColorSidebar, state: State) {
     let bs = sidebar.brightness_scale.clone();
     let cs = sidebar.contrast_scale.clone();
     let ss = sidebar.saturation_scale.clone();
+    let updating = sidebar.updating.clone();
 
     sidebar.brightness_scale.connect_value_changed(glib::clone!(
         #[strong]
         s,
+        #[strong]
+        updating,
         move |scale| {
+            if updating.get() {
+                return;
+            }
             s.dispatch(Command::SetBrightness(
                 Brightness::new(scale.value() as f32),
             ));
@@ -92,7 +122,12 @@ pub fn wire_color_handlers(sidebar: &ColorSidebar, state: State) {
     sidebar.contrast_scale.connect_value_changed(glib::clone!(
         #[strong]
         s,
+        #[strong]
+        updating,
         move |scale| {
+            if updating.get() {
+                return;
+            }
             s.dispatch(Command::SetContrast(Contrast::new(scale.value() as f32)));
         }
     ));
@@ -100,14 +135,23 @@ pub fn wire_color_handlers(sidebar: &ColorSidebar, state: State) {
     sidebar.saturation_scale.connect_value_changed(glib::clone!(
         #[strong]
         s,
+        #[strong]
+        updating,
         move |scale| {
-            s.dispatch(Command::SetSaturation(Saturation::new(scale.value() as f32)));
+            if updating.get() {
+                return;
+            }
+            s.dispatch(Command::SetSaturation(
+                Saturation::new(scale.value() as f32),
+            ));
         }
     ));
 
     sidebar.reset_btn.connect_clicked(glib::clone!(
         #[strong]
         s,
+        #[strong]
+        updating,
         #[weak]
         bs,
         #[weak]
@@ -118,9 +162,11 @@ pub fn wire_color_handlers(sidebar: &ColorSidebar, state: State) {
             s.dispatch(Command::SetBrightness(Brightness::ZERO));
             s.dispatch(Command::SetContrast(Contrast::ZERO));
             s.dispatch(Command::SetSaturation(Saturation::ZERO));
+            updating.set(true);
             bs.set_value(0.0);
             cs.set_value(0.0);
             ss.set_value(0.0);
+            updating.set(false);
         }
     ));
 }

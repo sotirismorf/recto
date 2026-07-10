@@ -1,6 +1,6 @@
 use opencv::{
     core::{self, Mat, Scalar, Vector},
-    imgcodecs, imgproc,
+    geometry, imgcodecs, imgproc,
     prelude::*,
 };
 use rayon::prelude::*;
@@ -191,14 +191,14 @@ fn detect_single_fast(path: &Path, page_rotation: Rotation) -> Option<(CropBox, 
     // Scoring Loop: Find the shape that looks most like a page.
     for i in 0..contours.len() {
         let contour = contours.get(i).ok()?;
-        let area = imgproc::contour_area(&contour, false).ok()?;
+        let area = geometry::contour_area(&contour, false).ok()?;
 
         // Basic area filters.
         if area < min_area || area > max_area {
             continue;
         }
 
-        let rect = imgproc::bounding_rect(&contour).ok()?;
+        let rect = geometry::bounding_rect(&contour).ok()?;
         let rect_area = (rect.width * rect.height) as f64;
         let rectangularity = area / rect_area;
 

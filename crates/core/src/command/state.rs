@@ -2,6 +2,7 @@ use std::cell::{Ref, RefCell};
 
 use crate::command::event::AppEvent;
 use crate::command::Command;
+use crate::domain::order::plan_move;
 use crate::domain::project::{Page, Project};
 use crate::io::config::load_config;
 
@@ -189,14 +190,13 @@ impl AppState {
                 }
             }
 
-            Command::ReorderPages { from, to } => {
-                let len = p.pages.len();
-                if *from < len && *to < len && from != to {
-                    let page = p.pages.remove(*from);
-                    p.pages.insert(*to, page);
-                    vec![AppEvent::ProjectChanged]
-                } else {
-                    vec![]
+            Command::MovePages { indices, before } => {
+                match plan_move(p.pages.len(), indices, *before) {
+                    Some(plan) => {
+                        plan.apply(&mut p.pages);
+                        vec![AppEvent::PagesReordered(plan.permutation)]
+                    }
+                    None => vec![],
                 }
             }
 
@@ -512,19 +512,85 @@ mod tests {
         assert!(!state.redo());
     }
 
-    #[test]
-    fn reorder_pages_moves_page_and_emits() {
-        let (state, rx) = AppState::new(project_with_page());
-        state.dispatch(Command::ReorderPages { from: 0, to: 1 });
-        assert_eq!(state.project().pages[1].path, PathBuf::from("a.png"));
-        assert_eq!(rx.try_recv().unwrap(), AppEvent::ProjectChanged);
+    fn project_with_pages(names: &[&str]) -> Project {
+        let mut p = Project::default();
+        for name in names {
+            p.pages.push(Page::new(PathBuf::from(name)));
+        }
+        p
+    }
+
+    fn page_names(state: &AppState) -> Vec<String> {
+        state
+            .project()
+            .pages
+            .iter()
+            .map(|p| p.path.to_string_lossy().into_owned())
+            .collect()
     }
 
     #[test]
-    fn reorder_pages_oob_emits_nothing() {
+    fn move_pages_moves_page_and_emits_permutation() {
         let (state, rx) = AppState::new(project_with_page());
-        state.dispatch(Command::ReorderPages { from: 0, to: 5 });
+        state.dispatch(Command::MovePages {
+            indices: vec![0],
+            before: 2,
+        });
+        assert_eq!(state.project().pages[1].path, PathBuf::from("a.png"));
+        assert_eq!(rx.try_recv().unwrap(), AppEvent::PagesReordered(vec![1, 0]));
+    }
+
+    #[test]
+    fn move_pages_gathers_non_contiguous_selection() {
+        let (state, _rx) = AppState::new(project_with_pages(&["a", "b", "c", "d", "e", "f"]));
+        state.dispatch(Command::MovePages {
+            indices: vec![4, 1],
+            before: 3,
+        });
+        assert_eq!(page_names(&state), ["a", "c", "b", "e", "d", "f"]);
+    }
+
+    #[test]
+    fn move_pages_to_end_appends() {
+        let (state, _rx) = AppState::new(project_with_pages(&["a", "b", "c"]));
+        state.dispatch(Command::MovePages {
+            indices: vec![0],
+            before: 3,
+        });
+        assert_eq!(page_names(&state), ["b", "c", "a"]);
+    }
+
+    #[test]
+    fn move_pages_noop_emits_nothing() {
+        let (state, rx) = AppState::new(project_with_page());
+        state.dispatch(Command::MovePages {
+            indices: vec![0],
+            before: 1,
+        });
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn move_pages_oob_emits_nothing() {
+        let (state, rx) = AppState::new(project_with_page());
+        state.dispatch(Command::MovePages {
+            indices: vec![0],
+            before: 5,
+        });
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn move_pages_undoes_in_a_single_step() {
+        let (state, _rx) = AppState::new(project_with_pages(&["a", "b", "c", "d"]));
+        state.dispatch(Command::MovePages {
+            indices: vec![0, 1],
+            before: 4,
+        });
+        assert_eq!(page_names(&state), ["c", "d", "a", "b"]);
+        assert!(state.undo());
+        assert_eq!(page_names(&state), ["a", "b", "c", "d"]);
+        assert!(!state.can_undo());
     }
 
     #[test]

@@ -11,6 +11,7 @@ pub use command::{AppEvent, AppState, Command};
 pub use domain::crop::{expand_crop, BleedInsets, CropBox, CropPreset};
 pub use domain::export::{ExportSettings, OutputSize, PdfCompression};
 pub use domain::geometry::Rect;
+pub use domain::order::{plan_move, MovePlan};
 pub use domain::project::{Page, Project};
 pub use domain::values::{
     Bleed, Brightness, Contrast, Dpi, JpegQuality, Rotation, Saturation, Scale,

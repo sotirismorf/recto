@@ -54,8 +54,25 @@ pub fn install_grid_css() {
             return;
         };
         let provider = gtk::CssProvider::new();
+        // The cell's inner padding belongs to `.photo-card`, not to the `child`
+        // node. Together with the card's Fill alignment (see `make_card`) that
+        // makes the card's allocation exactly the highlighted rounded
+        // rectangle, so every pixel a user reads as "the card" is a pixel the
+        // card's own gestures receive. Were the padding left on `child`, its
+        // ring would be part of the highlight but belong to the list item,
+        // where a press falls through to the grid's rubberband instead of
+        // starting a reorder.
+        //
+        // `margin` stays on `child`: it is outside the border box, so it is
+        // excluded from hit-testing and forms the gap that rubberbands.
         provider.load_from_string(
-            ".photo-grid > child { margin: 6px; padding: 8px; border-radius: 8px; }",
+            "\
+            .photo-grid > child { margin: 6px; border-radius: 8px; }\
+            .photo-card { padding: 8px; }\
+            .photo-card.drop-before { box-shadow: inset 3px 0 0 0 @accent_bg_color; }\
+            .photo-card.drop-after { box-shadow: inset -3px 0 0 0 @accent_bg_color; }\
+            .photo-card.dnd-source { opacity: 0.35; }\
+            ",
         );
         gtk::style_context_add_provider_for_display(
             &display,
@@ -66,13 +83,20 @@ pub fn install_grid_css() {
 }
 
 fn make_card() -> (gtk::Box, gtk::Image, gtk::Label) {
+    // Fill, not Center/Start: the card must span its whole cell so that its
+    // allocation coincides with the highlighted rounded rectangle, making the
+    // entire highlight draggable. The children below keep their own centering,
+    // so this changes hit-testing rather than layout. Expand stays off — a
+    // GridView hands its child the full cell regardless, and expand would only
+    // propagate up.
     let card = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(4)
-        .halign(gtk::Align::Center)
-        .valign(gtk::Align::Start)
+        .halign(gtk::Align::Fill)
+        .valign(gtk::Align::Fill)
         .hexpand(false)
         .vexpand(false)
+        .css_classes(["photo-card"])
         .build();
     // gtk::Image with pixel_size clamps its natural size to a fixed square —
     // unlike gtk::Picture, whose natural size grows with the paintable. That
@@ -96,17 +120,22 @@ fn make_card() -> (gtk::Box, gtk::Image, gtk::Label) {
 /// (used by the crop step to draw the crop rectangle). The caller's
 /// `set_draw` closure is invoked once per bind with the page's stable_id and
 /// the per-card DrawingArea, and is expected to install a draw_func on it.
-pub fn overlay_factory<F>(set_draw: F) -> gtk::SignalListItemFactory
+///
+/// `on_setup` runs once per *recycled card widget*, before any item is bound —
+/// the place to attach event controllers, which outlive binding.
+pub fn overlay_factory<F, S>(set_draw: F, on_setup: S) -> gtk::SignalListItemFactory
 where
     F: Fn(PageId, &gtk::DrawingArea) + 'static,
+    S: Fn(&gtk::Box, &gtk::ListItem) + 'static,
 {
     let set_draw = Rc::new(set_draw);
     let factory = gtk::SignalListItemFactory::new();
-    factory.connect_setup(|_, list_item| {
+    factory.connect_setup(move |_, list_item| {
         let item = list_item
             .downcast_ref::<gtk::ListItem>()
             .expect("ListItem expected");
         let (card, image, label) = make_card();
+        on_setup(&card, item);
         let overlay = gtk::Overlay::builder()
             .halign(gtk::Align::Center)
             .valign(gtk::Align::Center)

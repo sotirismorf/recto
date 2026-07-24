@@ -1,3 +1,4 @@
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 
 use adw::prelude::*;
@@ -7,36 +8,54 @@ use crate::app::State;
 use crate::latest::RequestDedup;
 use crate::widgets::page_item::PageItem;
 use crate::widgets::preview_canvas::PreviewCanvas;
+use crate::widgets::thumbnail_loader::ThumbReq;
 use recto_core::{Command, Rotation};
 
-/// Sync existing page-store items with the project state — only updates
-/// metadata (rotation, …) without reloading thumbnails from disk.
-pub(crate) fn sync_page_metadata(store: &gio::ListStore, state: &State) {
+/// Rebuild the page store so it matches the project page-for-page, reusing the
+/// existing [`PageItem`]s wherever possible.
+///
+/// This runs after undo/redo, where the project may have been reordered,
+/// truncated, or grown in ways no single fine-grained event describes. Items
+/// are matched to pages by path: two pages sharing a path are interchangeable
+/// here, because a thumbnail is derived purely from the path and rotation is
+/// re-synced below.
+///
+/// Returns a request for every page that had no item to reuse, so the caller
+/// can enqueue the missing thumbnails with the thumbnail service.
+pub(crate) fn reconcile_store(store: &gio::ListStore, state: &State) -> Vec<ThumbReq> {
     let project = state.project();
-    let store_len = store.n_items() as usize;
-    let project_len = project.pages.len();
 
-    // Update rotation on existing items only when it changed.
-    let n = store_len.min(project_len);
-    for i in 0..n {
-        if let Some(item) = store.item(i as u32).and_downcast::<PageItem>() {
-            let expected = project.pages[i].rotation.as_degrees() as u32;
-            if item.rotation() != expected {
-                item.set_rotation_absolute(expected);
+    let mut spare: HashMap<PathBuf, VecDeque<PageItem>> = HashMap::new();
+    for i in 0..store.n_items() {
+        let Some(item) = store.item(i).and_downcast::<PageItem>() else {
+            continue;
+        };
+        spare.entry(item.path()).or_default().push_back(item);
+    }
+
+    let mut items: Vec<PageItem> = Vec::with_capacity(project.pages.len());
+    let mut missing = Vec::new();
+    for page in &project.pages {
+        let item = match spare.get_mut(&page.path).and_then(VecDeque::pop_front) {
+            Some(item) => item,
+            None => {
+                let item = PageItem::new_placeholder(page.path.clone());
+                missing.push(ThumbReq {
+                    id: item.stable_id(),
+                    path: page.path.clone(),
+                });
+                item
             }
+        };
+        let rotation = page.rotation.as_degrees() as u32;
+        if item.rotation() != rotation {
+            item.set_rotation_absolute(rotation);
         }
+        items.push(item);
     }
-    // Remove excess items (pages were deleted).
-    while store.n_items() > project_len as u32 {
-        store.remove(store.n_items() - 1);
-    }
-    // Add placeholders for any new pages.
-    while (store.n_items() as usize) < project_len {
-        let i = store.n_items() as usize;
-        let item = PageItem::new_placeholder(project.pages[i].path.clone());
-        item.set_rotation(project.pages[i].rotation.as_degrees() as u32);
-        store.append(&item);
-    }
+
+    store.splice(0, store.n_items(), &items);
+    missing
 }
 
 pub(crate) fn update_arrange_preview(
@@ -69,6 +88,52 @@ pub(crate) fn rotate_selected(sel: &gtk::MultiSelection, state: &State, delta: i
             rotation: Rotation::new(new_deg),
         });
     }
+}
+
+/// Where a [`move_selection`] call sends the selected pages.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum MoveTarget {
+    Start,
+    Back,
+    Forward,
+    End,
+}
+
+/// Move the selected pages as one contiguous block.
+///
+/// The whole gesture is a single [`Command::MovePages`], so it costs exactly
+/// one undo step no matter how many pages are selected. The grid's selection
+/// follows the pages — see the `PagesReordered` arm of the projector.
+pub(crate) fn move_selection(sel: &gtk::MultiSelection, state: &State, target: MoveTarget) {
+    let indices: Vec<usize> = selected_positions(sel)
+        .into_iter()
+        .map(|p| p as usize)
+        .collect();
+    let (Some(&first), Some(&last)) = (indices.first(), indices.last()) else {
+        return;
+    };
+    let len = state.project().pages.len();
+
+    let before = match target {
+        MoveTarget::Start => 0,
+        MoveTarget::Back => first.saturating_sub(1),
+        // Past the page after the last selected one, so the block ends up
+        // one position further along.
+        MoveTarget::Forward => (last + 2).min(len),
+        MoveTarget::End => len,
+    };
+
+    state.dispatch(Command::MovePages { indices, before });
+}
+
+/// Whether the selection can still move towards the start / the end. Drives
+/// the sensitivity of the reorder buttons and actions.
+pub(crate) fn can_move(sel: &gtk::MultiSelection, page_count: usize) -> (bool, bool) {
+    let positions = selected_positions(sel);
+    let (Some(&first), Some(&last)) = (positions.first(), positions.last()) else {
+        return (false, false);
+    };
+    (first > 0, (last as usize) + 1 < page_count)
 }
 
 pub(crate) fn project_page_into_store(store: &gio::ListStore, state: &State, idx: usize) {

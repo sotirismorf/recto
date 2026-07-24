@@ -44,6 +44,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
                 match event {
                     AppEvent::PagesAdded(_)
                     | AppEvent::PagesRemoved(_)
+                    | AppEvent::PagesReordered(_)
                     | AppEvent::PageChanged(_)
                     | AppEvent::GlobalSettingsChanged
                     | AppEvent::PresetsChanged
@@ -506,6 +507,22 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
             .action(&gtk::ShortcutAction::parse_string("action(win.redo)").unwrap())
             .build(),
     );
+    // Page reordering. The actions live on the workspace and are disabled
+    // whenever the move would be a no-op, so these are inert outside Arrange
+    // work without needing a mode check here.
+    for (trigger, action) in [
+        ("<Control><Shift>Left", "arrange.move-back"),
+        ("<Control><Shift>Right", "arrange.move-forward"),
+        ("<Control><Shift>Home", "arrange.move-start"),
+        ("<Control><Shift>End", "arrange.move-end"),
+    ] {
+        sc.add_shortcut(
+            gtk::Shortcut::builder()
+                .trigger(&gtk::ShortcutTrigger::parse_string(trigger).unwrap())
+                .action(&gtk::ShortcutAction::parse_string(&format!("action({action})")).unwrap())
+                .build(),
+        );
+    }
     window.add_controller(sc);
 
     // ---- Close confirmation ----------------------------------------------

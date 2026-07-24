@@ -1,6 +1,7 @@
 pub mod color_preview;
 pub mod crop_overlay;
 pub mod crop_picker;
+pub mod grid_reorder;
 pub mod page_item;
 pub mod preset_chips;
 pub mod preview_canvas;

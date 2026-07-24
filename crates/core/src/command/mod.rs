@@ -17,9 +17,13 @@ use std::path::PathBuf;
 pub enum Command {
     AddPages(Vec<PathBuf>),
     RemovePages(Vec<usize>),
-    ReorderPages {
-        from: usize,
-        to: usize,
+    /// Move the pages at `indices` so they sit as one contiguous block
+    /// immediately before the page currently at `before` (`before == len`
+    /// appends). See [`plan_move`](crate::domain::order::plan_move) for the
+    /// exact semantics.
+    MovePages {
+        indices: Vec<usize>,
+        before: usize,
     },
     SetRotation {
         index: usize,

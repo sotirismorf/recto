@@ -24,11 +24,14 @@ use crate::widgets::thumbnail_loader::{
 use crate::widgets::zoom_pan::{ZoomPanConfig, ZoomPanController};
 use recto_core::{AppEvent, Command};
 
+use crate::types::PageId;
 use crate::views::workspace::crop::update_margin_spin;
+use crate::widgets::grid_reorder::ReorderDnd;
 use crate::worker::JobQueue;
 use css::{load_preset_css, load_sidebar_css};
 use helpers::{
-    make_mode_button, project_page_into_store, sync_page_metadata, update_arrange_preview,
+    make_mode_button, project_page_into_store, reconcile_store, selected_positions,
+    update_arrange_preview,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -76,6 +79,52 @@ fn projector_on_pages_removed(store: &gio::ListStore, indices: &[usize]) {
             store.remove(idx as u32);
         }
     }
+}
+
+/// Apply a reorder permutation to the store by moving the existing items, so
+/// thumbnails and stable ids survive untouched, and carry the selection along
+/// with the pages it was on.
+///
+/// Returns thumbnail requests for any page the caller still needs to load —
+/// only ever non-empty on the fallback path below.
+fn projector_on_pages_reordered(
+    store: &gio::ListStore,
+    state: &State,
+    selection: &gtk::MultiSelection,
+    permutation: &[usize],
+) -> Vec<ThumbReq> {
+    let items: Vec<PageItem> = (0..store.n_items())
+        .filter_map(|i| store.item(i).and_downcast::<PageItem>())
+        .collect();
+    if items.len() != permutation.len() {
+        // The permutation describes a project the store never caught up with.
+        // Bailing out would leave store positions pointing at the wrong pages,
+        // which the crop overlay reads as page indices — rebuild instead.
+        tracing::warn!(
+            "reorder permutation of {} does not match store of {}; rebuilding the store",
+            permutation.len(),
+            items.len()
+        );
+        return reconcile_store(store, state);
+    }
+
+    let selected: Vec<PageId> = selected_positions(selection)
+        .into_iter()
+        .filter_map(|p| items.get(p as usize).map(PageItem::stable_id))
+        .collect();
+
+    let reordered: Vec<PageItem> = permutation.iter().map(|&old| items[old].clone()).collect();
+    // A splice is one items-changed signal, but it also drops the selection —
+    // hence the explicit restore below.
+    store.splice(0, store.n_items(), &reordered);
+
+    selection.unselect_all();
+    for (pos, item) in reordered.iter().enumerate() {
+        if selected.contains(&item.stable_id()) {
+            selection.select_item(pos as u32, false);
+        }
+    }
+    Vec::new()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -148,14 +197,14 @@ pub fn build(
             })
         });
 
-    let (color_preview_svc, color_req, rx_color_res) =
-        PreviewService::<ColorReq, crate::widgets::color_preview::ColorResult>::new({
-            // Lives on the single preview worker thread; RefCell is safe here.
-            let cache = RefCell::new(crate::widgets::color_preview::BaseCache::default());
-            move |_id, req| {
-                crate::widgets::color_preview::render_preview(&req, &mut cache.borrow_mut())
-            }
-        });
+    let (color_preview_svc, color_req, rx_color_res) = PreviewService::<
+        ColorReq,
+        crate::widgets::color_preview::ColorResult,
+    >::new({
+        // Lives on the single preview worker thread; RefCell is safe here.
+        let cache = RefCell::new(crate::widgets::color_preview::BaseCache::default());
+        move |_id, req| crate::widgets::color_preview::render_preview(&req, &mut cache.borrow_mut())
+    });
 
     load_preset_css();
     load_sidebar_css();
@@ -244,52 +293,75 @@ pub fn build(
     mode_preview_stack.add_named(&preview_color, Some("color"));
 
     // ---- Grid --------------------------------------------------------------
+    // Reordering belongs to the Arrange step, but the grid is shared by all
+    // three modes, so drags are gated on the current mode rather than on a
+    // separate widget.
+    let reorder_dnd = ReorderDnd {
+        enabled: Rc::new({
+            let mode = current_mode.clone();
+            move || mode.get() == Mode::Arrange
+        }),
+        selection: selection.clone(),
+        on_move: Rc::new({
+            let state = state.clone();
+            move |indices, before| state.dispatch(Command::MovePages { indices, before })
+        }),
+    };
+
     let factory = {
         let state = state.clone();
         let store = page_store.clone();
         let overlays = overlays.clone();
         let mode_ref = current_mode.clone();
-        crate::widgets::thumbnail_grid::overlay_factory(move |stable_id, da| {
-            let st = state.clone();
-            let sto = store.clone();
-            let m = mode_ref.clone();
-            da.set_draw_func(move |_, cr, width, height| {
-                if m.get() == Mode::Crop {
-                    let current_pos = (0..sto.n_items()).find(|&i| {
-                        sto.item(i)
-                            .and_downcast::<PageItem>()
-                            .is_some_and(|item| item.stable_id() == stable_id)
-                    });
-                    if let Some(pos) = current_pos {
-                        crate::widgets::crop_overlay::draw_crop_overlay(
-                            cr,
-                            width as f64,
-                            height as f64,
-                            &st,
-                            &sto,
-                            pos as usize,
-                        );
+        crate::widgets::thumbnail_grid::overlay_factory(
+            move |stable_id, da| {
+                let st = state.clone();
+                let sto = store.clone();
+                let m = mode_ref.clone();
+                da.set_draw_func(move |_, cr, width, height| {
+                    if m.get() == Mode::Crop {
+                        let current_pos = (0..sto.n_items()).find(|&i| {
+                            sto.item(i)
+                                .and_downcast::<PageItem>()
+                                .is_some_and(|item| item.stable_id() == stable_id)
+                        });
+                        if let Some(pos) = current_pos {
+                            crate::widgets::crop_overlay::draw_crop_overlay(
+                                cr,
+                                width as f64,
+                                height as f64,
+                                &st,
+                                &sto,
+                                pos as usize,
+                            );
+                        }
                     }
+                });
+                let mut list = overlays.borrow_mut();
+                list.retain(|w| w.upgrade().is_some());
+                let da_ptr = da.as_ptr() as usize;
+                let already = list.iter().any(|w| {
+                    w.upgrade()
+                        .map(|x| x.as_ptr() as usize == da_ptr)
+                        .unwrap_or(false)
+                });
+                if !already {
+                    let w = glib::WeakRef::new();
+                    w.set(Some(da));
+                    list.push(w);
                 }
-            });
-            let mut list = overlays.borrow_mut();
-            list.retain(|w| w.upgrade().is_some());
-            let da_ptr = da.as_ptr() as usize;
-            let already = list.iter().any(|w| {
-                w.upgrade()
-                    .map(|x| x.as_ptr() as usize == da_ptr)
-                    .unwrap_or(false)
-            });
-            if !already {
-                let w = glib::WeakRef::new();
-                w.set(Some(da));
-                list.push(w);
-            }
-        })
+            },
+            {
+                let dnd = reorder_dnd.clone();
+                move |card, list_item| dnd.install_card(card, list_item)
+            },
+        )
     };
 
-    let (_grid_view, grid_scroll) =
+    let (grid_view, grid_scroll) =
         crate::widgets::thumbnail_grid::build_grid_scroll(&selection, &factory);
+    reorder_dnd.install_grid(&grid_view, &grid_scroll);
+    reorder_dnd.install_background(&grid_scroll);
 
     let click_gesture = gtk::GestureClick::builder().build();
     click_gesture.connect_pressed(glib::clone!(
@@ -346,6 +418,12 @@ pub fn build(
         .vexpand(true)
         .build();
     paned_sync.register(&paned);
+
+    let reorder_actions = Rc::new(arrange::wire_reorder_actions(
+        &paned,
+        state.clone(),
+        selection.clone(),
+    ));
 
     // ---- Async receivers ---------------------------------------------------
     glib::MainContext::default().spawn_local({
@@ -481,6 +559,25 @@ pub fn build(
                             preview_stack.set_visible_child_name("empty");
                         }
                     }
+                    AppEvent::PagesReordered(ref permutation) => {
+                        let restored = projector_on_pages_reordered(
+                            &page_store,
+                            &state,
+                            &selection,
+                            permutation,
+                        );
+                        if !restored.is_empty() {
+                            pending_tasks.set(pending_tasks.get() + restored.len());
+                            spinner.set_visible(true);
+                            spinner.start();
+                            thumb_svc.enqueue_batch(restored);
+                        }
+                        if current_mode.get() == Mode::Arrange {
+                            if let Some(preview) = preview_arrange.upgrade() {
+                                update_arrange_preview(&selection, &preview, &preview_req);
+                            }
+                        }
+                    }
                     AppEvent::PageChanged(idx) => {
                         project_page_into_store(&page_store, &state, idx);
                         if current_mode.get() == Mode::Arrange {
@@ -544,7 +641,16 @@ pub fn build(
                         preview_stack.set_visible_child_name("empty");
                     }
                     AppEvent::ProjectChanged => {
-                        sync_page_metadata(&page_store, &state);
+                        // Undo/redo can reorder, shrink, or grow the project
+                        // arbitrarily, so the store is rebuilt from scratch —
+                        // and any page that came back needs its thumbnail.
+                        let restored = reconcile_store(&page_store, &state);
+                        if !restored.is_empty() {
+                            pending_tasks.set(pending_tasks.get() + restored.len());
+                            spinner.set_visible(true);
+                            spinner.start();
+                            thumb_svc.enqueue_batch(restored);
+                        }
                         update_count(&count, &state);
                         crop::sync_bleed_spin(&crop_sidebar, &state);
                         color::sync_color_scales(&color_sidebar, &state);
@@ -608,6 +714,8 @@ pub fn build(
         page_store,
         #[strong]
         preset_callbacks,
+        #[strong]
+        reorder_actions,
         move |sel, _, _| {
             let bitset = sel.selection();
             let n = page_store.n_items();
@@ -624,6 +732,7 @@ pub fn build(
             rotate_cw.set_sensitive(any);
             rotate_180.set_sensitive(any);
             delete_btn.set_sensitive(any);
+            reorder_actions.sync(sel, n as usize);
 
             match current_mode.get() {
                 Mode::Arrange => {
@@ -677,6 +786,15 @@ pub fn build(
                 }
             }
         }
+    ));
+
+    // Whether a page can move also depends on how many pages there are, which
+    // selection-changed alone does not cover (adding pages can un-strand a
+    // selection that sat at the end).
+    selection.connect_items_changed(glib::clone!(
+        #[strong]
+        reorder_actions,
+        move |sel, _, _, _| reorder_actions.sync(sel, sel.n_items() as usize)
     ));
 
     // ---- Crop picker on_changed --------------------------------------------

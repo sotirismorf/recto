@@ -1,10 +1,9 @@
 use std::path::PathBuf;
 
-use gtk::prelude::*;
 use gtk::{gdk_pixbuf, glib};
 use image::DynamicImage;
 
-use crate::latest::RequestDedup;
+use crate::pixbuf::PixelData;
 use recto_core::transform::color::ColorAdjust;
 use recto_core::{CropBox, Project};
 
@@ -80,45 +79,24 @@ impl BaseCache {
     }
 }
 
-pub(crate) struct ColorResult {
-    pub(crate) bytes: glib::Bytes,
-    pub(crate) width: i32,
-    pub(crate) height: i32,
-    pub(crate) rowstride: i32,
-    pub(crate) has_alpha: bool,
+impl ColorReq {
+    /// Request a preview of page `index` with the project's colour settings.
+    pub(crate) fn for_page(project: &Project, index: usize) -> Option<Self> {
+        let page = project.pages.get(index)?;
+        Some(Self {
+            path: page.path.clone(),
+            rotation: page.rotation.as_degrees() as u32,
+            crop: page.crop,
+            color: ColorAdjust::from_project(project),
+        })
+    }
 }
 
-pub(crate) fn send_preview_req(
-    project: &Project,
-    selection: &gtk::MultiSelection,
-    req: &RequestDedup<ColorReq>,
-) {
-    let bs = selection.selection();
-    let first = match gtk::BitsetIter::init_first(&bs) {
-        Some((_, idx)) => idx as usize,
-        None => {
-            req.send_dummy();
-            return;
-        }
-    };
-    let Some(page) = project.pages.get(first) else {
-        return;
-    };
-    req.send(ColorReq {
-        path: page.path.clone(),
-        rotation: page.rotation.as_degrees() as u32,
-        crop: page.crop,
-        color: ColorAdjust::from_project(project),
-    });
-}
-
-pub(crate) fn render_preview(req: &ColorReq, cache: &mut BaseCache) -> Option<ColorResult> {
+pub(crate) fn render_preview(req: &ColorReq, cache: &mut BaseCache) -> Option<PixelData> {
     let base = match cache.get(req) {
         Some(img) => img.clone(),
         None => {
-            let pb = gdk_pixbuf::Pixbuf::from_file(&req.path).ok()?;
-            let pb = pb.apply_embedded_orientation().unwrap_or(pb);
-            let pb = crate::widgets::page_item::rotate(&pb, req.rotation);
+            let pb = crate::pixbuf::load_page(&req.path, req.rotation, None)?;
             let pb = match req.crop {
                 Some(c) => {
                     let x = (c.x as i32).min(pb.width().saturating_sub(1));
@@ -136,14 +114,7 @@ pub(crate) fn render_preview(req: &ColorReq, cache: &mut BaseCache) -> Option<Co
         }
     };
     let img = recto_core::transform::color::apply(base, &req.color);
-    let pb = dynamic_image_to_pixbuf(&img);
-    Some(ColorResult {
-        bytes: pb.read_pixel_bytes(),
-        width: pb.width(),
-        height: pb.height(),
-        rowstride: pb.rowstride(),
-        has_alpha: pb.has_alpha(),
-    })
+    Some(PixelData::from_pixbuf(&dynamic_image_to_pixbuf(&img)))
 }
 
 pub(crate) fn scale_down(pb: gdk_pixbuf::Pixbuf, max_px: i32) -> gdk_pixbuf::Pixbuf {

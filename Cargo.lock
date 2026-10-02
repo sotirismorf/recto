@@ -1590,6 +1590,7 @@ dependencies = [
  "dirs",
  "image",
  "kamadak-exif",
+ "miniz_oxide",
  "opencv",
  "pdf-writer",
  "rayon",

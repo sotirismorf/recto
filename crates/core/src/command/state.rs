@@ -1,20 +1,26 @@
-use std::cell::{Ref, RefCell};
+use std::cell::{Cell, Ref, RefCell, RefMut};
+use std::time::{Duration, Instant};
 
 use crate::command::event::AppEvent;
 use crate::command::Command;
 use crate::domain::order::plan_move;
 use crate::domain::project::{Page, Project};
-use crate::io::config::load_config;
 
 /// Maximum number of undo entries kept in the ring buffer.
 const MAX_UNDO: usize = 50;
+
+/// How long after the last edit of a setting a further edit of the same
+/// setting still joins its undo step (see [`Command::coalesce_key`]).
+const COALESCE_WINDOW: Duration = Duration::from_secs(1);
 
 /// Owns the [`Project`] behind a [`RefCell`] and is the single point of
 /// mutation.  Uses interior mutability so it can be shared behind an `Rc`
 /// while still offering `dispatch(&self, …)`.
 ///
 /// Undo/redo is snapshot-based: before every mutating operation the current
-/// project is pushed onto an undo stack (capped at [`MAX_UNDO`]).
+/// project is pushed onto an undo stack (capped at [`MAX_UNDO`]). A
+/// [`batch`](Self::batch) of dispatches shares one snapshot, and rapid edits
+/// of one setting coalesce into one.
 ///
 /// ```no_run
 /// use recto_core::command::{AppState, Command};
@@ -30,6 +36,10 @@ pub struct AppState {
     undo_stack: RefCell<Vec<Project>>,
     redo_stack: RefCell<Vec<Project>>,
     event_txs: RefCell<Vec<async_channel::Sender<AppEvent>>>,
+    /// Set while a [`batch`](Self::batch) runs: its snapshot is already taken.
+    in_batch: Cell<bool>,
+    /// Coalesce key and time of the last undoable dispatch.
+    last_edit: Cell<Option<(std::mem::Discriminant<Command>, Instant)>>,
 }
 
 impl AppState {
@@ -41,20 +51,39 @@ impl AppState {
                 undo_stack: RefCell::new(Vec::with_capacity(MAX_UNDO)),
                 redo_stack: RefCell::new(Vec::new()),
                 event_txs: RefCell::new(vec![tx]),
+                in_batch: Cell::new(false),
+                last_edit: Cell::new(None),
             },
             rx,
         )
     }
 
-    /// Immutable access (panics if already mutably borrowed).
+    /// Read the project.
+    ///
+    /// Don't hold the returned borrow across a [`dispatch`](Self::dispatch),
+    /// [`undo`](Self::undo) or similar: mutating the project while it is
+    /// borrowed panics. Copy what you need out first.
     pub fn project(&self) -> Ref<'_, Project> {
         self.project.borrow()
     }
 
     /// Apply a command to the project and emit resulting events.
-    /// Pushes the current state to the undo stack before mutating.
+    ///
+    /// Records an undo step first, unless it is part of a running
+    /// [`batch`](Self::batch) or continues a rapid edit of the same setting.
     pub fn dispatch(&self, cmd: Command) {
-        self.push_undo();
+        if !self.in_batch.get() {
+            let now = Instant::now();
+            let key = cmd.coalesce_key();
+            let continues = matches!(
+                (key, self.last_edit.get()),
+                (Some(k), Some((last, at))) if k == last && now - at < COALESCE_WINDOW
+            );
+            if !continues {
+                self.push_undo();
+            }
+            self.last_edit.set(key.map(|k| (k, now)));
+        }
         self.redo_stack.borrow_mut().clear();
         let events = self.apply(&cmd);
         for event in events {
@@ -62,22 +91,28 @@ impl AppState {
         }
     }
 
-    /// Apply a command without recording it in the undo stack (useful for
-    /// internal state sync that should not be independently undoable).
-    pub fn dispatch_without_undo(&self, cmd: Command) {
-        let events = self.apply(&cmd);
-        for event in events {
-            self.emit(event);
+    /// Run `f`, recording every [`dispatch`](Self::dispatch) inside it as a
+    /// single undo step. Nested batches join the outermost one.
+    pub fn batch(&self, f: impl FnOnce()) {
+        if self.in_batch.get() {
+            f();
+            return;
         }
+        self.push_undo();
+        self.last_edit.set(None);
+        self.in_batch.set(true);
+        f();
+        self.in_batch.set(false);
     }
 
     /// Replace the entire project (used for load / reset).
     /// Undo history is discarded: undoing across a project boundary would
     /// resurrect the previous project under the new session path.
     pub fn load_project(&self, project: Project) {
+        self.last_edit.set(None);
         self.undo_stack.borrow_mut().clear();
         self.redo_stack.borrow_mut().clear();
-        *self.project.borrow_mut() = project;
+        *self.project_mut() = project;
         self.emit(AppEvent::ProjectLoaded);
     }
 
@@ -85,19 +120,17 @@ impl AppState {
     ///
     /// [`load_project`]: Self::load_project
     pub fn clear(&self) {
+        self.last_edit.set(None);
         self.undo_stack.borrow_mut().clear();
         self.redo_stack.borrow_mut().clear();
-        let mut project = Project::default();
-        let config = load_config();
-        project.export = config.export;
-        project.export_scale = config.export_scale;
-        *self.project.borrow_mut() = project;
+        *self.project_mut() = Project::default();
         self.emit(AppEvent::ProjectCleared);
     }
 
     /// Undo the last [`dispatch`].
     /// Returns `true` if an undo step was available.
     pub fn undo(&self) -> bool {
+        self.last_edit.set(None);
         let snapshot = match self.undo_stack.borrow_mut().pop() {
             Some(s) => s,
             None => return false,
@@ -109,7 +142,7 @@ impl AppState {
         }
         redo.push(current);
         drop(redo);
-        *self.project.borrow_mut() = snapshot;
+        *self.project_mut() = snapshot;
         self.emit(AppEvent::ProjectChanged);
         true
     }
@@ -117,6 +150,7 @@ impl AppState {
     /// Redo the last undone operation.
     /// Returns `true` if a redo step was available.
     pub fn redo(&self) -> bool {
+        self.last_edit.set(None);
         let snapshot = match self.redo_stack.borrow_mut().pop() {
             Some(s) => s,
             None => return false,
@@ -124,7 +158,7 @@ impl AppState {
         self.undo_stack
             .borrow_mut()
             .push(self.project.borrow().clone());
-        *self.project.borrow_mut() = snapshot;
+        *self.project_mut() = snapshot;
         self.emit(AppEvent::ProjectChanged);
         true
     }
@@ -159,8 +193,14 @@ impl AppState {
         }
     }
 
+    fn project_mut(&self) -> RefMut<'_, Project> {
+        self.project.try_borrow_mut().expect(
+            "project mutated while a `project()` borrow is alive; drop it before dispatching",
+        )
+    }
+
     fn apply(&self, cmd: &Command) -> Vec<AppEvent> {
-        let mut p = self.project.borrow_mut();
+        let mut p = self.project_mut();
         match cmd {
             Command::AddPages(paths) => {
                 let start = p.pages.len();
@@ -261,18 +301,8 @@ impl AppState {
                 vec![AppEvent::GlobalSettingsChanged]
             }
 
-            Command::SetExportScale(scale) => {
-                p.export_scale = *scale;
-                vec![AppEvent::GlobalSettingsChanged]
-            }
-
             Command::SetBleed(val) => {
                 p.bleed = *val;
-                vec![AppEvent::GlobalSettingsChanged]
-            }
-
-            Command::SetExportSettings(settings) => {
-                p.export = settings.clone();
                 vec![AppEvent::GlobalSettingsChanged]
             }
 
@@ -604,14 +634,54 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_without_undo_skips_stack() {
+    fn batch_is_one_undo_step() {
         let (state, _rx) = AppState::new(project_with_page());
-        state.dispatch_without_undo(Command::SetRotation {
-            index: 0,
-            rotation: Rotation::DEG90,
+        state.batch(|| {
+            state.dispatch(Command::SetRotation {
+                index: 0,
+                rotation: Rotation::DEG90,
+            });
+            state.dispatch(Command::SetBleed(Bleed::new(10)));
         });
-        assert_eq!(state.project().pages[0].rotation, Rotation::DEG90);
+        assert!(state.undo());
+        assert_eq!(state.project().pages[0].rotation, Rotation::ZERO);
+        assert_eq!(state.project().bleed, Bleed::ZERO);
         assert!(!state.can_undo());
+    }
+
+    #[test]
+    fn slider_drag_coalesces_into_one_undo_step() {
+        let (state, _rx) = AppState::new(project_with_page());
+        for i in 1..=20 {
+            state.dispatch(Command::SetExposure(Exposure::new(i as f32 / 20.0)));
+        }
+        assert!(state.undo());
+        assert_eq!(state.project().exposure, Exposure::ZERO);
+        assert!(!state.can_undo());
+    }
+
+    #[test]
+    fn different_settings_do_not_coalesce() {
+        let (state, _rx) = AppState::new(project_with_page());
+        state.dispatch(Command::SetExposure(Exposure::new(0.5)));
+        state.dispatch(Command::SetBleed(Bleed::new(10)));
+        state.dispatch(Command::SetExposure(Exposure::new(0.7)));
+        assert!(state.undo());
+        assert_eq!(state.project().exposure, Exposure::new(0.5));
+        assert!(state.undo());
+        assert!(state.undo());
+        assert!(!state.can_undo());
+    }
+
+    #[test]
+    fn undo_ends_coalescing() {
+        let (state, _rx) = AppState::new(project_with_page());
+        state.dispatch(Command::SetExposure(Exposure::new(0.5)));
+        state.dispatch(Command::SetBleed(Bleed::new(10)));
+        assert!(state.undo());
+        state.dispatch(Command::SetExposure(Exposure::new(0.9)));
+        assert!(state.undo());
+        assert_eq!(state.project().exposure, Exposure::new(0.5));
     }
 
     #[test]

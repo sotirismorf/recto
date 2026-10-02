@@ -2,10 +2,15 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gtk::prelude::*;
-use gtk::{gdk, gdk_pixbuf, glib};
+use gtk::{gdk, glib};
 use recto_core::{Command, CropBox, Rect};
 
+use std::path::PathBuf;
+
+use crate::pixbuf::PixelData;
+
 use crate::app::State;
+use crate::latest::{PreviewService, RequestDedup};
 use crate::widgets::preview_canvas::PreviewCanvas;
 use crate::widgets::zoom_pan::{ZoomPanConfig, ZoomPanController};
 
@@ -154,6 +159,8 @@ struct DragState {
 
 #[derive(Default)]
 struct PickerState {
+    /// Path and rotation of the image currently shown (or loading).
+    loaded: Option<(PathBuf, u32)>,
     image_dims: Option<(f64, f64)>,
     binding: Option<(State, usize)>,
     crop: Option<Rect>,
@@ -167,6 +174,8 @@ pub struct CropPicker {
     zoom_pan: Rc<ZoomPanController>,
     state: RefCell<PickerState>,
     on_changed: RefCell<Vec<Box<dyn Fn()>>>,
+    /// Decodes the bound page off the main thread; latest request wins.
+    load_req: RequestDedup<(PathBuf, u32)>,
 }
 
 impl CropPicker {
@@ -191,6 +200,12 @@ impl CropPicker {
             },
         );
 
+        let (loader, load_req, loaded_rx) =
+            PreviewService::<(PathBuf, u32), PixelData>::new(|_id, (path, rotation)| {
+                crate::pixbuf::load_page(&path, rotation, None)
+                    .map(|pb| PixelData::from_pixbuf(&pb))
+            });
+
         let this = Rc::new(Self {
             overlay,
             canvas,
@@ -198,6 +213,22 @@ impl CropPicker {
             zoom_pan,
             state: RefCell::new(PickerState::default()),
             on_changed: RefCell::new(Vec::new()),
+            load_req,
+        });
+
+        glib::spawn_future_local({
+            let weak = Rc::downgrade(&this);
+            async move {
+                let _loader = loader;
+                while let Ok((id, pb)) = loaded_rx.recv().await {
+                    let Some(p) = weak.upgrade() else { break };
+                    if p.load_req.is_current(id) {
+                        p.canvas.set_texture(Some(pb.to_texture()));
+                        p.zoom_pan.refit_after_texture_change();
+                        p.area.queue_draw();
+                    }
+                }
+            }
         });
 
         this.zoom_pan.connect_changed({
@@ -298,21 +329,20 @@ impl CropPicker {
         self.on_changed.borrow_mut().push(Box::new(f));
     }
 
-    pub fn set_crop(&self, rect: Option<Rect>) {
-        self.state.borrow_mut().crop = rect;
-        self.area.queue_draw();
-    }
-
     /// Redraw the overlay without changing state (e.g. after a global
     /// setting such as bleed changed).
     pub fn queue_redraw(&self) {
         self.area.queue_draw();
     }
 
+    /// Show page `index` and its crop. Cheap when the page's image is
+    /// already shown: only the crop is re-read, so this can run on every
+    /// project change.
     pub fn bind(&self, state: State, index: usize) {
         let (path, rotation, crop) = {
             let project = state.project();
             let Some(page) = project.pages.get(index) else {
+                drop(project);
                 self.clear();
                 return;
             };
@@ -322,34 +352,42 @@ impl CropPicker {
                 page.crop.map(Rect::from),
             )
         };
-
-        let pb = gdk_pixbuf::Pixbuf::from_file(&path)
-            .ok()
-            .map(|pb| pb.apply_embedded_orientation().unwrap_or(pb))
-            .map(|pb| crate::widgets::page_item::rotate(&pb, rotation));
-
+        let source = (path, rotation);
+        let reload = self.state.borrow().loaded.as_ref() != Some(&source);
         {
             let mut s = self.state.borrow_mut();
-            s.image_dims = pb
-                .as_ref()
-                .map(|pb| (pb.width() as f64, pb.height() as f64));
             s.crop = crop;
             s.binding = Some((state, index));
+            s.drag = None;
+            if reload {
+                // Dimensions come from the header right away, so clamping and
+                // drags work while the pixels decode in the background.
+                s.image_dims = recto_core::io::oriented_dimensions(&source.0)
+                    .ok()
+                    .map(|(w, h)| match rotation % 180 {
+                        90 => (h as f64, w as f64),
+                        _ => (w as f64, h as f64),
+                    });
+                s.loaded = Some(source.clone());
+            }
         }
-
-        self.canvas
-            .set_texture(pb.as_ref().map(gdk::Texture::for_pixbuf));
-        self.zoom_pan.refit_after_texture_change();
+        if reload {
+            // Never show the previous page under this page's crop.
+            self.canvas.set_texture(None);
+            self.load_req.send(source);
+        }
         self.area.queue_draw();
     }
 
     pub fn clear(&self) {
         {
             let mut s = self.state.borrow_mut();
+            s.loaded = None;
             s.image_dims = None;
             s.crop = None;
             s.binding = None;
         }
+        self.load_req.send_dummy();
         self.canvas.set_texture(None);
         self.area.queue_draw();
     }
@@ -431,8 +469,14 @@ impl CropPicker {
 
     fn on_drag_end(&self) {
         self.state.borrow_mut().drag = None;
-        self.persist_crop();
-        self.sync_preset_from_drag();
+        let state = self.state.borrow().binding.as_ref().map(|(s, _)| s.clone());
+        if let Some(state) = state {
+            // The page's crop and its preset's size change together.
+            state.batch(|| {
+                self.persist_crop();
+                self.sync_preset_from_drag();
+            });
+        }
         self.emit_changed();
     }
 
@@ -543,7 +587,7 @@ impl CropPicker {
                     .pages
                     .get(*index)
                     .and_then(|p| p.crop_preset)
-                    .map(crate::widgets::crop_overlay::preset_color_rgb)
+                    .map(preset_color)
             })
             .unwrap_or((0.18, 0.6, 1.0));
 
@@ -637,6 +681,17 @@ impl CropPicker {
             let _ = cr.stroke();
         }
     }
+}
+
+/// Colour identifying crop preset `i`, as RGB fractions. Matches the
+/// `.preset-cN` classes in the preset chip CSS.
+pub(crate) fn preset_color(i: usize) -> (f64, f64, f64) {
+    const COLORS: [u32; 8] = [
+        0x3584e4, 0x33d17a, 0xff7800, 0x9141ac, 0xed333b, 0x1c71d8, 0xc061cb, 0x986a44,
+    ];
+    let c = COLORS[i % COLORS.len()];
+    let channel = |shift: u32| ((c >> shift) & 0xff) as f64 / 255.0;
+    (channel(16), channel(8), channel(0))
 }
 
 #[cfg(test)]

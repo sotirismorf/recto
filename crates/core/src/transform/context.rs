@@ -18,9 +18,12 @@ pub struct PipelineContext<'a> {
 }
 
 impl<'a> PipelineContext<'a> {
+    /// `scale` is the export scale, an export preference rather than part
+    /// of the project.
     pub fn from_page(
         project: &'a crate::domain::project::Project,
         page: &'a crate::domain::project::Page,
+        scale: Scale,
     ) -> Self {
         Self {
             source_path: &page.path,
@@ -28,7 +31,7 @@ impl<'a> PipelineContext<'a> {
             crop: page.crop,
             output: page.output,
             color: ColorAdjust::from_project(project),
-            scale: project.export_scale,
+            scale,
         }
     }
 }

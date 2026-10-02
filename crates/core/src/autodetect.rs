@@ -8,6 +8,7 @@ use std::path::Path;
 
 use crate::domain::crop::CropBox;
 use crate::domain::values::Rotation;
+use crate::io::{self, Orientation};
 
 /// Max dimension for the image during the detection phase.
 /// Using a smaller size (1000px) significantly speeds up processing without
@@ -25,15 +26,16 @@ pub struct CropCluster {
 /// scale inside libjpeg (DCT scaling), which is far cheaper than a full
 /// decode followed by a resize. Other formats fall back gracefully.
 ///
-/// Returns the decoded Mat plus the exact original dimensions in the same
-/// (EXIF-corrected) frame as the decoded pixels. `imread` applies EXIF
-/// orientation, so when the header dimensions come out axis-swapped relative
-/// to the decode we swap them to match.
+/// OpenCV's own EXIF handling is disabled and core's [`Orientation`] is
+/// applied instead, so detections are in exactly the frame the export
+/// pipeline crops in. Returns the decoded Mat plus the original dimensions
+/// in that same frame.
 fn imread_gray_reduced(path: &Path) -> Option<(Mat, u32, u32)> {
     let path_str = path.to_str()?;
 
-    // Header-only read for the exact pre-decode dimensions (cheap, no pixels).
+    // Header-only reads: exact pre-decode dimensions, no pixels.
     let raw_dims = image::image_dimensions(path).ok();
+    let orientation = io::read_orientation(path);
 
     let flag = match raw_dims {
         Some((w, h)) => {
@@ -51,28 +53,44 @@ fn imread_gray_reduced(path: &Path) -> Option<(Mat, u32, u32)> {
         None => imgcodecs::IMREAD_GRAYSCALE,
     };
 
-    let decoded = imgcodecs::imread(path_str, flag).ok()?;
+    let decoded = imgcodecs::imread(path_str, flag | imgcodecs::IMREAD_IGNORE_ORIENTATION).ok()?;
     if decoded.empty() {
         return None;
     }
+    let decoded = orient_mat(decoded, orientation)?;
 
     let (orig_w, orig_h) = match raw_dims {
-        Some((raw_w, raw_h)) => {
-            // Reduced decode preserves the landscape/portrait ordering, so a
-            // flipped ordering means imread applied an axis-swapping EXIF
-            // orientation — report the original dimensions in that frame.
-            let landscape_raw = raw_w >= raw_h;
-            let landscape_decoded = decoded.cols() >= decoded.rows();
-            if landscape_raw == landscape_decoded {
-                (raw_w, raw_h)
-            } else {
-                (raw_h, raw_w)
-            }
-        }
+        Some((w, h)) if orientation.swaps_axes() => (h, w),
+        Some(dims) => dims,
         None => (decoded.cols() as u32, decoded.rows() as u32),
     };
 
     Some((decoded, orig_w, orig_h))
+}
+
+/// Apply an EXIF orientation to a Mat, matching [`Orientation::apply`].
+fn orient_mat(src: Mat, orientation: Orientation) -> Option<Mat> {
+    let rotate = |m: &Mat, code: i32| {
+        let mut dst = Mat::default();
+        core::rotate(m, &mut dst, code).ok().map(|_| dst)
+    };
+    let flip_h = |m: &Mat| {
+        let mut dst = Mat::default();
+        core::flip(m, &mut dst, 1).ok().map(|_| dst)
+    };
+    match orientation {
+        Orientation::FlipH => flip_h(&src),
+        Orientation::Rotate180 => rotate(&src, core::ROTATE_180),
+        Orientation::FlipV => {
+            let mut dst = Mat::default();
+            core::flip(&src, &mut dst, 0).ok().map(|_| dst)
+        }
+        Orientation::Transpose => flip_h(&rotate(&src, core::ROTATE_90_CLOCKWISE)?),
+        Orientation::Rotate90 => rotate(&src, core::ROTATE_90_CLOCKWISE),
+        Orientation::Transverse => flip_h(&rotate(&src, core::ROTATE_90_COUNTERCLOCKWISE)?),
+        Orientation::Rotate270 => rotate(&src, core::ROTATE_90_COUNTERCLOCKWISE),
+        _ => Some(src),
+    }
 }
 
 /// Detects the visible page boundary in a single image.
@@ -353,14 +371,11 @@ pub fn detect_all_pages(paths: &[(usize, &Path, Rotation)]) -> Vec<(usize, CropB
         .filter_map(|&(idx, path, rotation)| {
             let (crop, (w, h)) = detect_single_fast(path, rotation).unwrap_or_else(|| {
                 // Fallback: Return the full image size if detection fails.
-                let src =
-                    imgcodecs::imread(path.to_str().unwrap_or(""), imgcodecs::IMREAD_UNCHANGED)
-                        .ok();
-                if let Some(s) = src {
+                if let Ok((w, h)) = io::oriented_dimensions(path) {
                     let (w, h) = if matches!(rotation, Rotation::DEG90 | Rotation::DEG270) {
-                        (s.rows() as u32, s.cols() as u32)
+                        (h, w)
                     } else {
-                        (s.cols() as u32, s.rows() as u32)
+                        (w, h)
                     };
                     (CropBox { x: 0, y: 0, w, h }, (w, h))
                 } else {

@@ -4,6 +4,27 @@ use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{DynamicImage, ImageFormat};
 use std::path::Path;
 
+/// Dimensions of the image at `path` in its EXIF-corrected frame, read from
+/// the headers without decoding pixels.
+pub fn oriented_dimensions(path: &Path) -> Result<(u32, u32)> {
+    let (w, h) = image::image_dimensions(path)?;
+    Ok(if crate::io::exif::read_orientation(path).swaps_axes() {
+        (h, w)
+    } else {
+        (w, h)
+    })
+}
+
+/// Dimensions of `page` as shown and cropped: EXIF-corrected, then the
+/// page's own rotation applied. Header read only.
+pub fn page_dimensions(page: &crate::domain::project::Page) -> Option<(u32, u32)> {
+    let (w, h) = oriented_dimensions(&page.path).ok()?;
+    Some(match page.rotation.as_degrees() % 180 {
+        90 => (h, w),
+        _ => (w, h),
+    })
+}
+
 /// Load an image from `path` using the `image` crate's auto-detection.
 pub fn load(path: &Path) -> Result<DynamicImage> {
     image::open(path).map_err(Into::into)

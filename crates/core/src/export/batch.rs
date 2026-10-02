@@ -1,6 +1,7 @@
-use crate::domain::export::ExportSettings;
+use crate::domain::export::ImageFormat;
 use crate::domain::project::Page;
 use crate::domain::project::Project;
+use crate::domain::values::Scale;
 use crate::error::{Error, Result};
 use crate::io;
 use crate::transform::{transform_page, PipelineContext};
@@ -9,8 +10,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-/// Process every page in parallel, saving individual image files according to
-/// the project's [`ExportSettings`].
+/// Process every page in parallel, saving individual image files in
+/// `format`.
 ///
 /// The `on_progress` callback receives `(done, total)` after each page
 /// completes.  Returns one [`Result`] per page in order.
@@ -20,6 +21,8 @@ use std::sync::Arc;
 #[must_use]
 pub fn run_batch<F>(
     project: &Project,
+    format: ImageFormat,
+    scale: Scale,
     cancel: Arc<AtomicBool>,
     on_progress: F,
 ) -> Vec<Result<PathBuf>>
@@ -29,7 +32,6 @@ where
     let total = project.pages.len();
     let done = AtomicUsize::new(0);
     on_progress(0, total);
-
     project
         .pages
         .par_iter()
@@ -38,7 +40,7 @@ where
             if cancel.load(Ordering::Relaxed) {
                 return Err(Error::Cancelled);
             }
-            let r = process_one(project, page, i + 1);
+            let r = process_one(project, page, format, scale, i + 1);
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             on_progress(n, total);
             r
@@ -47,25 +49,21 @@ where
 }
 
 /// Export a single page to an image file, returning the output path.
-fn process_one(project: &Project, page: &Page, index: usize) -> Result<PathBuf> {
-    let ctx = PipelineContext::from_page(project, page);
+fn process_one(
+    project: &Project,
+    page: &Page,
+    format: ImageFormat,
+    scale: Scale,
+    index: usize,
+) -> Result<PathBuf> {
+    let ctx = PipelineContext::from_page(project, page, scale);
     let img = transform_page(&ctx)?;
-
-    let ext = match project.export {
-        ExportSettings::Png { .. } => "png",
-        ExportSettings::Jpeg { .. } => "jpg",
-        ExportSettings::Tiff => "tiff",
-        ExportSettings::Pdf { .. } => unreachable!(),
-    };
-    let filename = format!("{}_{:02}.{}", project.prefix, index, ext);
+    let filename = format!("{}_{:02}.{}", project.prefix, index, format.extension());
     let out_path = project.output_dir.join(filename);
-
-    match &project.export {
-        ExportSettings::Png { compression } => io::save_png(&img, &out_path, *compression)?,
-        ExportSettings::Jpeg { quality } => io::save_jpeg(&img, &out_path, *quality)?,
-        ExportSettings::Tiff => io::save_tiff(&img, &out_path)?,
-        ExportSettings::Pdf { .. } => unreachable!(),
+    match format {
+        ImageFormat::Png { compression } => io::save_png(&img, &out_path, compression)?,
+        ImageFormat::Jpeg { quality } => io::save_jpeg(&img, &out_path, quality)?,
+        ImageFormat::Tiff => io::save_tiff(&img, &out_path)?,
     }
-
     Ok(out_path)
 }

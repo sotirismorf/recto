@@ -2,10 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::domain::crop::{CropBox, CropPreset};
-use crate::domain::export::{ExportSettings, OutputSize};
-use crate::domain::values::{
-    BlackLevel, Bleed, Exposure, Rotation, Saturation, Scale, Temperature, Tint,
-};
+use crate::domain::export::OutputSize;
+use crate::domain::values::{BlackLevel, Bleed, Exposure, Rotation, Saturation, Temperature, Tint};
 
 pub const CURRENT_SCHEMA: u32 = 1;
 
@@ -18,11 +16,11 @@ pub struct Page {
     pub path: PathBuf,
     #[serde(default)]
     pub rotation: Rotation,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crop: Option<CropBox>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crop_preset: Option<usize>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<OutputSize>,
 }
 
@@ -45,7 +43,6 @@ pub struct Project {
     pub pages: Vec<Page>,
     #[serde(default)]
     pub crop_presets: Vec<CropPreset>,
-    pub export: ExportSettings,
     pub output_dir: PathBuf,
     pub prefix: String,
     #[serde(default)]
@@ -59,8 +56,6 @@ pub struct Project {
     #[serde(default)]
     pub saturation: Saturation,
     #[serde(default)]
-    pub export_scale: Scale,
-    #[serde(default)]
     pub bleed: Bleed,
 }
 
@@ -70,7 +65,6 @@ impl Default for Project {
             version: CURRENT_SCHEMA,
             pages: Vec::new(),
             crop_presets: Vec::new(),
-            export: ExportSettings::default(),
             output_dir: PathBuf::new(),
             prefix: "page".into(),
             exposure: Exposure::ZERO,
@@ -78,7 +72,6 @@ impl Default for Project {
             temperature: Temperature::ZERO,
             tint: Tint::ZERO,
             saturation: Saturation::ZERO,
-            export_scale: Scale::FULL,
             bleed: Bleed::ZERO,
         }
     }

@@ -1,89 +1,20 @@
-use crate::domain::crop::CropPreset;
-use crate::domain::export::ExportSettings;
-use crate::domain::project::{Page, Project, CURRENT_SCHEMA};
-use crate::domain::values::{
-    BlackLevel, Bleed, Exposure, Rotation, Saturation, Scale, Temperature, Tint,
-};
+use crate::domain::project::{Project, CURRENT_SCHEMA};
 use crate::error::{Error, Result};
 use crate::io;
-use serde::Serialize;
 use std::path::Path;
 
-#[derive(Serialize)]
-struct ProjectView<'a> {
-    version: u32,
-    pages: Vec<PageView<'a>>,
-    crop_presets: &'a [CropPreset],
-    export: &'a ExportSettings,
-    output_dir: &'a Path,
-    prefix: &'a str,
-    #[serde(default)]
-    exposure: Exposure,
-    #[serde(default)]
-    black_level: BlackLevel,
-    #[serde(default)]
-    temperature: Temperature,
-    #[serde(default)]
-    tint: Tint,
-    #[serde(default)]
-    saturation: Saturation,
-    #[serde(default)]
-    export_scale: Scale,
-    #[serde(default)]
-    bleed: Bleed,
-}
-
-#[derive(Serialize)]
-struct PageView<'a> {
-    path: &'a Path,
-    #[serde(default)]
-    rotation: Rotation,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    crop: Option<crate::domain::crop::CropBox>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    crop_preset: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    output: Option<crate::domain::export::OutputSize>,
-}
-
-impl<'a> From<&'a Page> for PageView<'a> {
-    fn from(page: &'a Page) -> Self {
-        Self {
-            path: &page.path,
-            rotation: page.rotation,
-            crop: page.crop,
-            crop_preset: page.crop_preset,
-            output: page.output,
-        }
-    }
-}
-
+/// Save `project` as JSON. Page paths under the project file's directory are
+/// stored relative to it, so a project folder can be moved as a whole.
 pub fn save_project(project: &Project, file_path: &Path) -> Result<()> {
     let base = file_path.parent().unwrap_or(Path::new("."));
-    let pages: Vec<PageView> = project
-        .pages
-        .iter()
-        .map(|p| PageView {
-            path: p.path.strip_prefix(base).unwrap_or(&p.path),
-            ..PageView::from(p)
-        })
-        .collect();
-    let view = ProjectView {
-        version: CURRENT_SCHEMA,
-        pages,
-        crop_presets: &project.crop_presets,
-        export: &project.export,
-        output_dir: &project.output_dir,
-        prefix: &project.prefix,
-        exposure: project.exposure,
-        black_level: project.black_level,
-        temperature: project.temperature,
-        tint: project.tint,
-        saturation: project.saturation,
-        export_scale: project.export_scale,
-        bleed: project.bleed,
-    };
-    let json = serde_json::to_string_pretty(&view)?;
+    let mut saved = project.clone();
+    saved.version = CURRENT_SCHEMA;
+    for page in &mut saved.pages {
+        if let Ok(relative) = page.path.strip_prefix(base) {
+            page.path = relative.to_path_buf();
+        }
+    }
+    let json = serde_json::to_string_pretty(&saved)?;
     io::write_atomic(file_path, json.as_bytes())
 }
 
@@ -123,9 +54,11 @@ pub fn load_project(file_path: &Path) -> Result<Project> {
 mod tests {
     use super::*;
     use crate::domain::crop::{CropBox, CropPreset};
-    use crate::domain::export::{ExportSettings, OutputSize};
+    use crate::domain::export::OutputSize;
     use crate::domain::project::Page;
-    use crate::domain::values::JpegQuality;
+    use crate::domain::values::{
+        BlackLevel, Bleed, Exposure, Rotation, Saturation, Temperature, Tint,
+    };
 
     #[test]
     fn project_round_trip_save_load() {
@@ -154,9 +87,6 @@ mod tests {
                 h: 200,
                 locked: false,
             }],
-            export: ExportSettings::Jpeg {
-                quality: JpegQuality::new(85),
-            },
             output_dir: tmp.path().join("out"),
             prefix: "img".into(),
             exposure: Exposure::new(-0.5),
@@ -164,7 +94,6 @@ mod tests {
             temperature: Temperature::new(0.2),
             tint: Tint::new(-0.1),
             saturation: Saturation::new(-0.5),
-            export_scale: Scale::new(0.5),
             bleed: Bleed::new(24),
         };
 
@@ -186,12 +115,6 @@ mod tests {
             })
         );
         assert_eq!(loaded.crop_presets[0].name, "test");
-        assert_eq!(
-            loaded.export,
-            ExportSettings::Jpeg {
-                quality: JpegQuality::new(85),
-            }
-        );
         assert_eq!(loaded.exposure, Exposure::new(-0.5));
         assert_eq!(loaded.black_level, BlackLevel::new(0.03));
         assert_eq!(loaded.temperature, Temperature::new(0.2));
@@ -232,5 +155,22 @@ mod tests {
         let project = load_project(&proj_path).unwrap();
         assert_eq!(project.version, 1);
         assert_eq!(project.bleed, Bleed::ZERO);
+    }
+
+    #[test]
+    fn saves_page_paths_relative_to_the_project_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut project = Project::default();
+        project
+            .pages
+            .push(Page::new(tmp.path().join("scans/p1.jpg")));
+        let proj_path = tmp.path().join("book.recto");
+        save_project(&project, &proj_path).unwrap();
+
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&proj_path).unwrap()).unwrap();
+        assert_eq!(json["pages"][0]["path"], "scans/p1.jpg");
+        assert!(json["pages"][0].get("crop").is_none());
+        assert_eq!(project.pages[0].path, tmp.path().join("scans/p1.jpg"));
     }
 }

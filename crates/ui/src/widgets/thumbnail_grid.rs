@@ -2,13 +2,11 @@
 //! crop, and colors steps. Centralising this keeps card sizing, CSS, and
 //! property bindings consistent across the three views.
 
-use std::rc::Rc;
 use std::sync::OnceLock;
 
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 
-use crate::types::PageId;
 use crate::widgets::page_item::PageItem;
 
 pub const THUMB_PX: i32 = 150;
@@ -119,26 +117,23 @@ fn make_card() -> (gtk::Box, gtk::Image, gtk::Label) {
     (card, image, label)
 }
 
-/// Factory for a grid where each thumbnail has a transparent overlay on top
-/// (used by the crop step to draw the crop rectangle). The caller's
-/// `set_draw` closure is invoked once per bind with the page's stable_id and
-/// the per-card DrawingArea, and is expected to install a draw_func on it.
+/// Factory for the page grid. Each card has a transparent DrawingArea over
+/// its thumbnail (the crop step draws the page's crop there).
 ///
-/// `on_setup` runs once per *recycled card widget*, before any item is bound —
-/// the place to attach event controllers, which outlive binding.
-pub fn overlay_factory<F, S>(set_draw: F, on_setup: S) -> gtk::SignalListItemFactory
+/// `on_setup` runs once per *recycled card widget*, before any item is bound,
+/// with the card, its overlay and its list item: the place to attach event
+/// controllers and draw functions, which outlive binding. A draw function can
+/// find its page through `ListItem::item` / `ListItem::position`.
+pub fn page_grid_factory<S>(on_setup: S) -> gtk::SignalListItemFactory
 where
-    F: Fn(PageId, &gtk::DrawingArea) + 'static,
-    S: Fn(&gtk::Box, &gtk::ListItem) + 'static,
+    S: Fn(&gtk::Box, &gtk::DrawingArea, &gtk::ListItem) + 'static,
 {
-    let set_draw = Rc::new(set_draw);
     let factory = gtk::SignalListItemFactory::new();
     factory.connect_setup(move |_, list_item| {
         let item = list_item
             .downcast_ref::<gtk::ListItem>()
             .expect("ListItem expected");
         let (card, image, label) = make_card();
-        on_setup(&card, item);
         let overlay = gtk::Overlay::builder()
             .halign(gtk::Align::Center)
             .valign(gtk::Align::Center)
@@ -155,35 +150,30 @@ where
         card.append(&overlay);
         card.append(&label);
         item.set_child(Some(&card));
+        on_setup(&card, &da, item);
     });
-    factory.connect_bind({
-        let set_draw = set_draw.clone();
-        move |_, list_item| {
-            let item = list_item
-                .downcast_ref::<gtk::ListItem>()
-                .expect("ListItem expected");
-            let page: PageItem = item.item().and_downcast().expect("PageItem expected");
-            let card: gtk::Box = item.child().and_downcast().expect("Box card expected");
-            let overlay: gtk::Overlay = card
-                .first_child()
-                .and_downcast()
-                .expect("first card child must be Overlay");
-            let image: gtk::Image = overlay
-                .first_child()
-                .and_downcast()
-                .expect("first overlay child must be Image");
-            let label: gtk::Label = overlay
-                .next_sibling()
-                .and_downcast()
-                .expect("second card child must be Label");
-            // The only widget added via add_overlay is our DrawingArea, so it
-            // is the overlay's last child.
-            let da: gtk::DrawingArea = overlay
-                .last_child()
-                .and_downcast()
-                .expect("overlay must have a DrawingArea on top");
-            bind_props(item, &page, &image, &label);
-            set_draw(page.stable_id(), &da);
+    factory.connect_bind(|_, list_item| {
+        let item = list_item
+            .downcast_ref::<gtk::ListItem>()
+            .expect("ListItem expected");
+        let page: PageItem = item.item().and_downcast().expect("PageItem expected");
+        let card: gtk::Box = item.child().and_downcast().expect("Box card expected");
+        let overlay: gtk::Overlay = card
+            .first_child()
+            .and_downcast()
+            .expect("first card child must be Overlay");
+        let image: gtk::Image = overlay
+            .first_child()
+            .and_downcast()
+            .expect("first overlay child must be Image");
+        let label: gtk::Label = overlay
+            .next_sibling()
+            .and_downcast()
+            .expect("second card child must be Label");
+        bind_props(item, &page, &image, &label);
+        // Bound to another page: redraw its crop overlay.
+        if let Some(da) = overlay.last_child() {
+            da.queue_draw();
         }
     });
     factory.connect_unbind(|_, list_item| {

@@ -85,7 +85,7 @@ impl PageItem {
             *i.base_pixbuf.borrow_mut() = Some(base.clone());
         }
         let current_rotation = self.rotation();
-        let rotated = rotate(&base, current_rotation);
+        let rotated = crate::pixbuf::rotate(&base, current_rotation);
         let texture = gdk::Texture::for_pixbuf(&rotated);
         self.set_thumbnail(Some(texture.upcast::<gdk::Paintable>()));
     }
@@ -109,7 +109,7 @@ impl PageItem {
         self.set_rotation(deg);
         let base = self.imp().base_pixbuf.borrow().clone();
         if let Some(base) = base {
-            let rotated = rotate(&base, deg);
+            let rotated = crate::pixbuf::rotate(&base, deg);
             let texture = gdk::Texture::for_pixbuf(&rotated);
             self.set_thumbnail(Some(texture.upcast::<gdk::Paintable>()));
         }
@@ -125,20 +125,5 @@ impl PageItem {
 
     pub fn set_rotation_value(&self, r: Rotation) {
         self.set_rotation_absolute(r.as_degrees() as u32);
-    }
-}
-
-pub fn rotate(p: &gdk_pixbuf::Pixbuf, deg: u32) -> gdk_pixbuf::Pixbuf {
-    match deg % 360 {
-        90 => p
-            .rotate_simple(gdk_pixbuf::PixbufRotation::Clockwise)
-            .unwrap_or_else(|| p.clone()),
-        180 => p
-            .rotate_simple(gdk_pixbuf::PixbufRotation::Upsidedown)
-            .unwrap_or_else(|| p.clone()),
-        270 => p
-            .rotate_simple(gdk_pixbuf::PixbufRotation::Counterclockwise)
-            .unwrap_or_else(|| p.clone()),
-        _ => p.clone(),
     }
 }

@@ -5,16 +5,13 @@ pub use event::AppEvent;
 pub use state::AppState;
 
 use crate::domain::crop::{CropBox, CropPreset};
-use crate::domain::export::{ExportSettings, OutputSize};
-use crate::domain::values::{
-    BlackLevel, Bleed, Exposure, Rotation, Saturation, Scale, Temperature, Tint,
-};
+use crate::domain::export::OutputSize;
+use crate::domain::values::{BlackLevel, Bleed, Exposure, Rotation, Saturation, Temperature, Tint};
 use std::path::PathBuf;
 
-/// Every mutation to the project is expressed as a [`Command`].
-///
-/// Commands carry all the data needed to apply **and** reverse the mutation,
-/// making them the foundation for undo/redo (see [`AppState`]).
+/// Every mutation to the project is expressed as a [`Command`] and applied
+/// by [`AppState::dispatch`]. Undo is snapshot-based, so commands only need
+/// to describe the forward change.
 #[derive(Clone, Debug)]
 pub enum Command {
     AddPages(Vec<PathBuf>),
@@ -48,9 +45,7 @@ pub enum Command {
     SetTemperature(Temperature),
     SetTint(Tint),
     SetSaturation(Saturation),
-    SetExportScale(Scale),
     SetBleed(Bleed),
-    SetExportSettings(ExportSettings),
     SetOutputDir(PathBuf),
     SetPrefix(String),
     AddCropPreset(CropPreset),
@@ -64,4 +59,21 @@ pub enum Command {
         w: u32,
         h: u32,
     },
+}
+
+impl Command {
+    /// Continuous edits (slider drags, spin buttons) of the same setting share
+    /// a key; consecutive dispatches with equal keys in quick succession
+    /// coalesce into one undo step.
+    pub(crate) fn coalesce_key(&self) -> Option<std::mem::Discriminant<Self>> {
+        match self {
+            Self::SetExposure(_)
+            | Self::SetBlackLevel(_)
+            | Self::SetTemperature(_)
+            | Self::SetTint(_)
+            | Self::SetSaturation(_)
+            | Self::SetBleed(_) => Some(std::mem::discriminant(self)),
+            _ => None,
+        }
+    }
 }

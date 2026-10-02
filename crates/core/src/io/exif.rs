@@ -32,7 +32,18 @@ impl From<u16> for Orientation {
 }
 
 impl Orientation {
+    /// Whether correcting this orientation swaps width and height.
+    pub fn swaps_axes(self) -> bool {
+        matches!(
+            self,
+            Self::Transpose | Self::Rotate90 | Self::Transverse | Self::Rotate270
+        )
+    }
+
     /// Apply the orientation correction to an image.
+    ///
+    /// This is the single definition of the EXIF-corrected frame that crop
+    /// coordinates live in; every preview and decoder must match it.
     #[must_use]
     pub fn apply(self, img: DynamicImage) -> DynamicImage {
         match self {
@@ -50,8 +61,8 @@ impl Orientation {
 
 /// Read the EXIF orientation tag from `path`, falling back to [`Orientation::Normal`].
 ///
-/// File-open errors are logged at warn level; a missing EXIF orientation field
-/// is logged at debug level (most images don't have one).
+/// File-open errors are logged at warn level; missing EXIF data is logged at
+/// debug level (many images have none).
 pub fn read_orientation(path: &Path) -> Orientation {
     fn try_read(path: &Path) -> Option<Orientation> {
         let file = std::fs::File::open(path)
@@ -60,9 +71,8 @@ pub fn read_orientation(path: &Path) -> Orientation {
         let mut reader = std::io::BufReader::new(file);
         let exif = exif::Reader::new()
             .read_from_container(&mut reader)
-            .inspect_err(|e| {
-                tracing::warn!("cannot parse EXIF for {path}: {e}", path = path.display())
-            })
+            // Most PNG/TIFF/WebP files simply have no EXIF block.
+            .inspect_err(|e| tracing::debug!("no EXIF in {}: {e}", path.display()))
             .ok()?;
         let field = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?;
         let tag = field.value.get_uint(0)?;

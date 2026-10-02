@@ -11,28 +11,8 @@ use crate::worker::JobQueue;
 use recto_core::error::Error;
 use recto_core::{load_config, save_config};
 use recto_core::{
-    AppConfig, AppEvent, Command, ExportSettings, JpegQuality, PdfCompression, PdfMeta, Scale,
+    AppConfig, Command, ExportSettings, JpegQuality, PdfCompression, PdfMeta, PdfOptions, Scale,
 };
-
-/// Build PDF export settings from the current state of the dialog widgets.
-fn pdf_settings(
-    pdf_enc_combo: &adw::ComboRow,
-    quality_adj: &gtk::Adjustment,
-    manual_height_mm: &Cell<u32>,
-    estimate_row: &adw::SwitchRow,
-) -> ExportSettings {
-    let compression = match pdf_enc_combo.selected() {
-        1 => PdfCompression::Flate,
-        2 => PdfCompression::Ccit,
-        _ => PdfCompression::Jpeg,
-    };
-    ExportSettings::Pdf {
-        compression,
-        quality: JpegQuality::new(quality_adj.value() as u8),
-        page_height_mm: manual_height_mm.get(),
-        estimate_page_height: estimate_row.is_active(),
-    }
-}
 
 enum ExportMsg {
     Progress(usize, usize),
@@ -51,12 +31,9 @@ pub fn show_export_dialog(state: State, parent: &gtk::Window, job_queue: Rc<JobQ
     let header = adw::HeaderBar::new();
     let toolbar_view = adw::ToolbarView::new();
     toolbar_view.add_top_bar(&header);
+    // Export settings are app preferences, kept in the config file rather
+    // than the project: changing them is neither undoable nor a project edit.
     let config = Rc::new(RefCell::new(load_config()));
-    {
-        let cfg = config.borrow();
-        state.dispatch_without_undo(Command::SetExportSettings(cfg.export.clone()));
-        state.dispatch_without_undo(Command::SetExportScale(cfg.export_scale));
-    }
     let content = build_export_content(state, job_queue, config);
     toolbar_view.set_content(Some(&content));
     dialog.set_content(Some(&toolbar_view));
@@ -72,27 +49,11 @@ fn build_export_content(
     let pdf_meta = Rc::new(RefCell::new(config.borrow().pdf_meta.clone()));
     let p = state.project();
 
-    // ---- Auto-save settings to global config -------------------------------
-    {
-        let config = config.clone();
-        let state = state.clone();
-        let pdf_meta = pdf_meta.clone();
-        let settings_rx = state.subscribe();
-        glib::spawn_future_local(async move {
-            while let Ok(event) = settings_rx.recv().await {
-                if matches!(event, AppEvent::GlobalSettingsChanged) {
-                    let p = state.project();
-                    let mut cfg = config.borrow_mut();
-                    cfg.export = p.export.clone();
-                    cfg.export_scale = p.export_scale;
-                    cfg.pdf_meta = pdf_meta.borrow().clone();
-                    if let Err(e) = save_config(&cfg) {
-                        tracing::error!("Failed to auto-save config: {e}");
-                    }
-                }
-            }
-        });
-    }
+    let settings = config.borrow().export.clone();
+    let pdf_opts = match &settings {
+        ExportSettings::Pdf(opts) => opts.clone(),
+        _ => PdfOptions::default(),
+    };
 
     // ---- Format ComboRow ----------------------------------------------------
     let format_list = gtk::StringList::new(&["JPEG", "PNG", "TIFF", "PDF"]);
@@ -100,31 +61,23 @@ fn build_export_content(
         .title("Format")
         .model(&format_list)
         .build();
-    {
-        match p.export {
-            ExportSettings::Jpeg { .. } => format_combo.set_selected(0),
-            ExportSettings::Png { .. } => format_combo.set_selected(1),
-            ExportSettings::Tiff => format_combo.set_selected(2),
-            ExportSettings::Pdf { .. } => format_combo.set_selected(3),
-            _ => {}
-        }
-    }
+    format_combo.set_selected(match settings {
+        ExportSettings::Jpeg { .. } => 0,
+        ExportSettings::Png { .. } => 1,
+        ExportSettings::Tiff => 2,
+        _ => 3,
+    });
 
     // ---- PDF encoding ComboRow ---------------------------------------------
-    let pdf_enc_list = gtk::StringList::new(&["JPEG", "Flate", "CCITT"]);
+    let pdf_enc_list = gtk::StringList::new(&["JPEG (smaller)", "Lossless"]);
     let pdf_enc_combo = adw::ComboRow::builder()
         .title("PDF encoding")
         .model(&pdf_enc_list)
         .build();
-    {
-        if let ExportSettings::Pdf { compression, .. } = &p.export {
-            match compression {
-                PdfCompression::Jpeg => pdf_enc_combo.set_selected(0),
-                PdfCompression::Flate => pdf_enc_combo.set_selected(1),
-                PdfCompression::Ccit => pdf_enc_combo.set_selected(2),
-            }
-        }
-    }
+    pdf_enc_combo.set_selected(match pdf_opts.compression {
+        PdfCompression::Jpeg => 0,
+        PdfCompression::Flate => 1,
+    });
 
     // ---- Output directory ActionRow ----------------------------------------
     let dir_row = adw::ActionRow::builder()
@@ -167,22 +120,18 @@ fn build_export_content(
     meta_row.add_suffix(&meta_btn);
 
     // ---- Quality SpinRow (JPEG / PDF-JPEG) ----------------------------------
-    let quality_adj = gtk::Adjustment::new(85.0, 1.0, 100.0, 1.0, 10.0, 0.0);
-    {
-        match &p.export {
-            ExportSettings::Jpeg { quality } | ExportSettings::Pdf { quality, .. } => {
-                quality_adj.set_value(quality.as_u8() as f64);
-            }
-            _ => {}
-        }
-    }
+    let quality = match &settings {
+        ExportSettings::Jpeg { quality } => *quality,
+        _ => pdf_opts.quality,
+    };
+    let quality_adj = gtk::Adjustment::new(quality.as_u8() as f64, 1.0, 100.0, 1.0, 10.0, 0.0);
     let quality_row = adw::SpinRow::new(Some(&quality_adj), 1.0, 0);
     quality_row.set_title("JPEG quality");
 
     // ---- PNG compression SpinRow -------------------------------------------
     let png_comp_adj = gtk::Adjustment::new(3.0, 0.0, 9.0, 1.0, 2.0, 0.0);
     {
-        if let ExportSettings::Png { compression } = &p.export {
+        if let ExportSettings::Png { compression } = &settings {
             png_comp_adj.set_value(*compression as f64);
         }
     }
@@ -191,7 +140,7 @@ fn build_export_content(
 
     // ---- Scale SpinRow -----------------------------------------------------
     let scale_adj = gtk::Adjustment::new(
-        (p.export_scale.as_f64() * 100.0).round(),
+        (config.borrow().export_scale.as_f64() * 100.0).round(),
         1.0,
         100.0,
         1.0,
@@ -203,12 +152,8 @@ fn build_export_content(
     scale_row.set_subtitle("Percentage of original size");
 
     // ---- Page height SpinRow (PDF only) ------------------------------------
-    let page_height_adj = gtk::Adjustment::new(0.0, 0.0, 5000.0, 1.0, 10.0, 0.0);
-    {
-        if let ExportSettings::Pdf { page_height_mm, .. } = &p.export {
-            page_height_adj.set_value(*page_height_mm as f64);
-        }
-    }
+    let page_height_adj =
+        gtk::Adjustment::new(pdf_opts.page_height_mm as f64, 0.0, 5000.0, 1.0, 10.0, 0.0);
     let page_height_row = adw::SpinRow::new(Some(&page_height_adj), 1.0, 0);
     page_height_row.set_title("Page height (mm)");
     page_height_row.set_subtitle("0 for original size");
@@ -224,13 +169,7 @@ fn build_export_content(
             Some(mm) => format!("\u{2248} {mm:.0} mm, from the first page's EXIF focus data"),
             None => "No usable camera data on the first page; page height is used".into(),
         })
-        .active(matches!(
-            p.export,
-            ExportSettings::Pdf {
-                estimate_page_height: true,
-                ..
-            }
-        ))
+        .active(pdf_opts.estimate_page_height)
         .build();
 
     // While the estimate is in use the spin row shows it and is locked; the
@@ -388,132 +327,84 @@ fn build_export_content(
 
     // ---- Signal handlers ---------------------------------------------------
 
-    // Format combo changes → dispatch + update visibility.
-    format_combo.connect_selected_notify({
-        let state = state.clone();
-        let update = update_visibility.clone();
+    // Every control saves the whole settings value, read back from the widgets.
+    let save: Rc<dyn Fn()> = Rc::new({
+        let config = config.clone();
+        let format_combo = format_combo.clone();
+        let pdf_enc_combo = pdf_enc_combo.clone();
         let quality_adj = quality_adj.clone();
         let png_comp_adj = png_comp_adj.clone();
+        let scale_adj = scale_adj.clone();
         let manual_height = manual_height.clone();
-        let pdf_enc_combo = pdf_enc_combo.clone();
         let estimate_row = estimate_row.clone();
-        move |combo| {
-            update();
-            let idx = combo.selected();
-            let settings = match idx {
-                0 => ExportSettings::Jpeg {
-                    quality: JpegQuality::new(quality_adj.value() as u8),
-                },
+        move || {
+            let quality = JpegQuality::new(quality_adj.value() as u8);
+            let export = match format_combo.selected() {
+                0 => ExportSettings::Jpeg { quality },
                 1 => ExportSettings::Png {
                     compression: png_comp_adj.value() as u8,
                 },
                 2 => ExportSettings::Tiff,
-                3 => pdf_settings(&pdf_enc_combo, &quality_adj, &manual_height, &estimate_row),
-                _ => return,
+                _ => ExportSettings::Pdf(PdfOptions {
+                    compression: if pdf_enc_combo.selected() == 1 {
+                        PdfCompression::Flate
+                    } else {
+                        PdfCompression::Jpeg
+                    },
+                    quality,
+                    page_height_mm: manual_height.get(),
+                    estimate_page_height: estimate_row.is_active(),
+                }),
             };
-            state.dispatch(Command::SetExportSettings(settings));
+            let mut cfg = config.borrow_mut();
+            cfg.export = export;
+            cfg.export_scale = Scale::new(scale_adj.value() / 100.0);
+            if let Err(e) = save_config(&cfg) {
+                tracing::error!("Failed to save export settings: {e}");
+            }
         }
     });
 
-    // PDF encoding combo changes → dispatch + update visibility.
-    pdf_enc_combo.connect_selected_notify({
-        let state = state.clone();
+    format_combo.connect_selected_notify({
         let update = update_visibility.clone();
-        let quality_adj = quality_adj.clone();
-        let manual_height = manual_height.clone();
-        let estimate_row = estimate_row.clone();
-        move |combo| {
+        let save = save.clone();
+        move |_| {
             update();
-            state.dispatch(Command::SetExportSettings(pdf_settings(
-                combo,
-                &quality_adj,
-                &manual_height,
-                &estimate_row,
-            )));
+            save();
         }
     });
-
-    // Quality adjustment.
-    quality_adj.connect_value_changed({
-        let state = state.clone();
-        let format_combo = format_combo.clone();
-        let pdf_enc_combo = pdf_enc_combo.clone();
-        let manual_height = manual_height.clone();
-        let estimate_row = estimate_row.clone();
-        move |adj| {
-            let q = JpegQuality::new(adj.value() as u8);
-            if is_jpeg(&format_combo) {
-                state.dispatch(Command::SetExportSettings(ExportSettings::Jpeg {
-                    quality: q,
-                }));
-            } else if is_pdf(&format_combo) && pdf_enc_is_jpeg(&pdf_enc_combo) {
-                state.dispatch(Command::SetExportSettings(pdf_settings(
-                    &pdf_enc_combo,
-                    adj,
-                    &manual_height,
-                    &estimate_row,
-                )));
-            }
+    pdf_enc_combo.connect_selected_notify({
+        let update = update_visibility.clone();
+        let save = save.clone();
+        move |_| {
+            update();
+            save();
         }
     });
+    for adj in [&quality_adj, &png_comp_adj, &scale_adj] {
+        let save = save.clone();
+        adj.connect_value_changed(move |_| save());
+    }
 
-    // PNG compression adjustment.
-    png_comp_adj.connect_value_changed({
-        let state = state.clone();
-        let format_combo = format_combo.clone();
-        move |adj| {
-            if is_png(&format_combo) {
-                state.dispatch(Command::SetExportSettings(ExportSettings::Png {
-                    compression: adj.value() as u8,
-                }));
-            }
-        }
-    });
-
-    // Scale adjustment.
-    scale_adj.connect_value_changed({
-        let state = state.clone();
-        move |adj| {
-            state.dispatch(Command::SetExportScale(Scale::new(adj.value() / 100.0)));
-        }
-    });
-
-    // Page height adjustment.
     page_height_adj.connect_value_changed({
-        let state = state.clone();
-        let quality_adj = quality_adj.clone();
-        let pdf_enc_combo = pdf_enc_combo.clone();
         let estimate_row = estimate_row.clone();
         let manual_height = manual_height.clone();
+        let save = save.clone();
         move |adj| {
             // Ignore the value written by the estimate lock.
             if estimate_row.is_active() && estimate.is_some() {
                 return;
             }
             manual_height.set(adj.value() as u32);
-            state.dispatch(Command::SetExportSettings(pdf_settings(
-                &pdf_enc_combo,
-                &quality_adj,
-                &manual_height,
-                &estimate_row,
-            )));
+            save();
         }
     });
 
-    // Estimate page height switch.
     estimate_row.connect_active_notify({
-        let state = state.clone();
-        let quality_adj = quality_adj.clone();
-        let pdf_enc_combo = pdf_enc_combo.clone();
-        let manual_height = manual_height.clone();
+        let save = save.clone();
         move |row| {
             apply_estimate_lock(row.is_active());
-            state.dispatch(Command::SetExportSettings(pdf_settings(
-                &pdf_enc_combo,
-                &quality_adj,
-                &manual_height,
-                row,
-            )));
+            save();
         }
     });
 
@@ -553,7 +444,7 @@ fn build_export_content(
         let state = state.clone();
         let prefix_row = prefix_row.clone();
         let pdf_name_row = pdf_name_row.clone();
-        let quality_adj = quality_adj.clone();
+        let config = config.clone();
         let export_btn = export_btn.clone();
         let cancel_btn = cancel_btn.clone();
         let status_lbl = status_lbl.clone();
@@ -571,7 +462,14 @@ fn build_export_content(
             } else {
                 prefix_row.text().to_string()
             };
-            state.dispatch(Command::SetPrefix(text));
+            // The name is part of the project; only record a real change.
+            if state.project().prefix != text {
+                state.dispatch(Command::SetPrefix(text));
+            }
+            let (settings, scale) = {
+                let cfg = config.borrow();
+                (cfg.export.clone(), cfg.export_scale)
+            };
 
             let project = state.project().clone();
 
@@ -603,9 +501,8 @@ fn build_export_content(
 
             let tx = tx.clone();
 
-            if is_pdf {
+            if let ExportSettings::Pdf(opts) = settings {
                 let meta = pdf_meta.borrow().clone();
-                let quality = JpegQuality::new(quality_adj.value() as u8);
                 let out_path = project.output_dir.join(format!("{}.pdf", project.prefix));
                 let job_queue = job_queue.clone();
                 job_queue.spawn(move || {
@@ -613,7 +510,8 @@ fn build_export_content(
                         &project,
                         &out_path,
                         &meta,
-                        quality,
+                        &opts,
+                        scale,
                         cancel,
                         |done, _| {
                             let _ = tx.send_blocking(ExportMsg::Progress(done, total));
@@ -638,12 +536,18 @@ fn build_export_content(
                     };
                     let _ = tx.send_blocking(ExportMsg::Done(lines));
                 });
-            } else {
+            } else if let Some(format) = settings.image_format() {
                 let job_queue = job_queue.clone();
                 job_queue.spawn(move || {
-                    let results = recto_core::export::run_batch(&project, cancel, |done, _| {
-                        let _ = tx.send_blocking(ExportMsg::Progress(done, total));
-                    });
+                    let results = recto_core::export::run_batch(
+                        &project,
+                        format,
+                        scale,
+                        cancel,
+                        |done, _| {
+                            let _ = tx.send_blocking(ExportMsg::Progress(done, total));
+                        },
+                    );
                     let lines: Vec<(bool, String)> = results
                         .into_iter()
                         .map(|r| match r {

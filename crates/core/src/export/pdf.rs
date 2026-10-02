@@ -1,7 +1,7 @@
 use crate::domain::crop::BleedInsets;
-use crate::domain::export::ExportSettings;
+use crate::domain::export::{PdfCompression, PdfOptions};
 use crate::domain::project::Project;
-use crate::domain::values::JpegQuality;
+use crate::domain::values::Scale;
 use crate::error::{Error, Result};
 use crate::io;
 use crate::io::config::PdfMeta;
@@ -12,7 +12,57 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-/// Export all pages as a single PDF with JPEG-encoded images.
+/// One page's encoded image plus the geometry needed to place it.
+struct PdfPage {
+    data: Vec<u8>,
+    filter: pdf_writer::Filter,
+    w: u32,
+    h: u32,
+    insets: BleedInsets,
+    expanded: (u32, u32),
+}
+
+/// Encode a page image for embedding: JPEG (DCTDecode) or lossless zlib
+/// (FlateDecode) over the raw 8-bit RGB samples.
+fn encode_image(img: DynamicImage, opts: &PdfOptions) -> Result<(Vec<u8>, pdf_writer::Filter)> {
+    let rgb = img.into_rgb8();
+    Ok(match opts.compression {
+        PdfCompression::Jpeg => {
+            let mut jpeg = Vec::new();
+            DynamicImage::ImageRgb8(rgb).write_with_encoder(JpegEncoder::new_with_quality(
+                &mut jpeg,
+                opts.quality.as_u8(),
+            ))?;
+            (jpeg, pdf_writer::Filter::DctDecode)
+        }
+        PdfCompression::Flate => (
+            miniz_oxide::deflate::compress_to_vec_zlib(rgb.as_raw(), 6),
+            pdf_writer::Filter::FlateDecode,
+        ),
+    })
+}
+
+/// The visible page height in millimetres: the EXIF estimate from the first
+/// page when requested and available, otherwise the configured height.
+fn page_height_mm(project: &Project, opts: &PdfOptions) -> u32 {
+    if !opts.estimate_page_height {
+        return opts.page_height_mm;
+    }
+    project
+        .pages
+        .first()
+        .and_then(io::estimate_page_height_mm)
+        .map(|mm| mm.round() as u32)
+        .unwrap_or_else(|| {
+            tracing::warn!(
+                "cannot estimate page height from EXIF; using {} mm",
+                opts.page_height_mm
+            );
+            opts.page_height_mm
+        })
+}
+
+/// Export all pages as a single PDF, encoding images per `opts`.
 ///
 /// The `on_progress` callback receives `(done, total)` after each page.
 /// Metadata from [`PdfMeta`] is written into the PDF document info dictionary.
@@ -21,66 +71,53 @@ pub fn export_to_pdf<F>(
     project: &Project,
     out_path: &Path,
     meta: &PdfMeta,
-    jpeg_quality: JpegQuality,
+    opts: &PdfOptions,
+    scale: Scale,
     cancel: Arc<AtomicBool>,
     on_progress: F,
 ) -> Result<()>
 where
     F: Fn(usize, usize) + Sync + Send,
 {
-    use pdf_writer::{Filter, Name, Pdf, Rect, Ref, TextStr};
+    use pdf_writer::{Name, Pdf, Rect, Ref, TextStr};
 
     let total = project.pages.len();
     let done = AtomicUsize::new(0);
-    let quality = jpeg_quality.as_u8();
     on_progress(0, total);
 
-    type PdfPage = (Vec<u8>, u32, u32, BleedInsets, (u32, u32));
-    let jpeg_data: Vec<Result<PdfPage>> = project
+    let encoded: Vec<Result<PdfPage>> = project
         .pages
         .par_iter()
         .map(|page| {
             if cancel.load(Ordering::Relaxed) {
                 return Err(Error::Cancelled);
             }
-            let ctx = PipelineContext::from_page(project, page);
+            let ctx = PipelineContext::from_page(project, page, scale);
             let (img, insets, expanded) = transform_page_bleed(&ctx, project.bleed.as_u32())?;
             let (w, h) = (img.width(), img.height());
-            let mut jpeg = Vec::new();
-            DynamicImage::ImageRgb8(img.into_rgb8())
-                .write_with_encoder(JpegEncoder::new_with_quality(&mut jpeg, quality))?;
+            let (data, filter) = encode_image(img, opts)?;
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             on_progress(n, total);
-            Ok((jpeg, w, h, insets, expanded))
+            Ok(PdfPage {
+                data,
+                filter,
+                w,
+                h,
+                insets,
+                expanded,
+            })
         })
         .collect();
 
-    for result in &jpeg_data {
+    for result in &encoded {
         if let Err(Error::Cancelled) = result {
             return Err(Error::Cancelled);
         }
     }
 
-    let pages: Vec<PdfPage> = jpeg_data.into_iter().collect::<Result<_>>()?;
+    let pages: Vec<PdfPage> = encoded.into_iter().collect::<Result<_>>()?;
     let n = pages.len();
-
-    let page_height_mm = match project.export {
-        ExportSettings::Pdf {
-            page_height_mm,
-            estimate_page_height: true,
-            ..
-        } => project
-            .pages
-            .first()
-            .and_then(io::estimate_page_height_mm)
-            .map(|mm| mm.round() as u32)
-            .unwrap_or_else(|| {
-                tracing::warn!("cannot estimate page height from EXIF; using {page_height_mm} mm");
-                page_height_mm
-            }),
-        ExportSettings::Pdf { page_height_mm, .. } => page_height_mm,
-        _ => 0,
-    };
+    let page_height_mm = page_height_mm(project, opts);
 
     let mut pdf = Pdf::new();
     let mut alloc = Ref::new(1);
@@ -91,17 +128,23 @@ where
         .map(|_| [alloc.bump(), alloc.bump(), alloc.bump()])
         .collect();
 
-    for (i, (jpeg, w, h, insets, expanded)) in pages.iter().enumerate() {
+    for (i, page_img) in pages.iter().enumerate() {
         let [img_ref, content_ref, page_ref] = refs[i];
-        let ((w_pt, h_pt), inner) =
-            page_boxes(*w, *h, insets, *expanded, meta.dpi.as_f64(), page_height_mm);
+        let ((w_pt, h_pt), inner) = page_boxes(
+            page_img.w,
+            page_img.h,
+            &page_img.insets,
+            page_img.expanded,
+            meta.dpi.as_f64(),
+            page_height_mm,
+        );
 
-        pdf.image_xobject(img_ref, jpeg)
-            .width(*w as i32)
-            .height(*h as i32)
+        pdf.image_xobject(img_ref, &page_img.data)
+            .width(page_img.w as i32)
+            .height(page_img.h as i32)
             .color_space_name(Name(b"DeviceRGB"))
             .bits_per_component(8)
-            .filter(Filter::DctDecode);
+            .filter(page_img.filter);
 
         let content = format!("q\n{w_pt:.4} 0 0 {h_pt:.4} 0 0 cm\n/Im Do\nQ\n");
         pdf.stream(content_ref, content.as_bytes());
@@ -203,6 +246,42 @@ fn page_boxes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flate_embeds_exact_pixels() {
+        let tmp = tempfile::tempdir().unwrap();
+        let img_path = tmp.path().join("p.png");
+        let src =
+            image::RgbImage::from_fn(7, 5, |x, y| image::Rgb([x as u8 * 30, y as u8 * 50, 9]));
+        src.save(&img_path).unwrap();
+        let mut project = Project::default();
+        project
+            .pages
+            .push(crate::domain::project::Page::new(img_path));
+        let out = tmp.path().join("out.pdf");
+        let opts = PdfOptions {
+            compression: PdfCompression::Flate,
+            ..Default::default()
+        };
+        export_to_pdf(
+            &project,
+            &out,
+            &PdfMeta::default(),
+            &opts,
+            Scale::FULL,
+            Arc::new(AtomicBool::new(false)),
+            |_, _| {},
+        )
+        .unwrap();
+
+        let pdf = std::fs::read(&out).unwrap();
+        let find = |needle: &[u8]| pdf.windows(needle.len()).position(|w| w == needle);
+        assert!(find(b"/FlateDecode").is_some());
+        let start = find(b"stream\n").unwrap() + b"stream\n".len();
+        let end = start + find(b"\nendstream").unwrap() - start;
+        let raw = miniz_oxide::inflate::decompress_to_vec_zlib(&pdf[start..end]).unwrap();
+        assert_eq!(raw, src.into_raw());
+    }
 
     const EPS: f64 = 1e-6;
 

@@ -8,8 +8,11 @@ pub mod transform;
 pub mod autodetect;
 
 pub use command::{AppEvent, AppState, Command};
-pub use domain::crop::{expand_crop, BleedInsets, CropBox, CropPreset};
-pub use domain::export::{ExportSettings, OutputSize, PdfCompression};
+pub use domain::crop::{
+    centered_crop, expand_crop, group_by_size, resize_crop, resize_crop_centered, BleedInsets,
+    CropBox, CropPreset,
+};
+pub use domain::export::{ExportSettings, ImageFormat, OutputSize, PdfCompression, PdfOptions};
 pub use domain::geometry::Rect;
 pub use domain::order::{plan_move, MovePlan};
 pub use domain::project::{Page, Project};

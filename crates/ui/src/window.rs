@@ -6,7 +6,6 @@ use std::rc::Rc;
 
 use crate::app::{new_state, new_store, Session};
 use crate::types::AppError;
-use crate::views;
 use recto_core::AppEvent;
 
 thread_local! {
@@ -23,14 +22,16 @@ pub fn show_toast(text: &str) {
     });
 }
 
-pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
+/// Build the main window. `initial_files` come from the command line or the
+/// file manager: a `.recto` file is opened as a project, anything else is
+/// added as page images.
+pub fn build(app: &adw::Application, initial_files: Vec<PathBuf>) {
     let (state, event_rx) = new_state();
     let session = Session::new(state.clone());
     let page_store = new_store();
     // Shared selection — every tab's grid view models on the same selection,
     // so picking pages on import carries over to crop and colors.
     let selection = gtk::MultiSelection::new(Some(page_store.clone().upcast::<gio::ListModel>()));
-    let paned_sync = views::PanedSync::new();
 
     // Dirty tracker: subscribes to mutation events and marks the session dirty.
     // ProjectLoaded / ProjectCleared are excluded: they start a clean session,
@@ -99,7 +100,6 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
         state.clone(),
         page_store.clone(),
         selection.clone(),
-        paned_sync.clone(),
         spinner.clone(),
         count.clone(),
         Rc::clone(&load_images),
@@ -447,7 +447,7 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
             let about = adw::AboutWindow::builder()
                 .application_name("Recto")
                 .application_icon("io.github.sotirismorf.Recto")
-                .version("0.1.0")
+                .version(env!("CARGO_PKG_VERSION"))
                 .developer_name("Sotiris Morfakidis")
                 .comments("The powerful book scanning post-processor")
                 .license_type(gtk::License::Gpl30)
@@ -555,8 +555,13 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
 
     window.present();
 
-    if let Some(path) = project_path {
+    let (projects, images): (Vec<PathBuf>, Vec<PathBuf>) = initial_files
+        .into_iter()
+        .partition(|p| p.extension().is_some_and(|e| e == "recto"));
+    if let Some(path) = projects.into_iter().next() {
         on_project(path);
+    } else if !images.is_empty() {
+        on_files(images);
     }
 }
 

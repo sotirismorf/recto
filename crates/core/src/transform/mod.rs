@@ -82,7 +82,7 @@ mod tests {
     use crate::domain::crop::CropBox;
     use crate::domain::export::OutputSize;
     use crate::domain::project::{Page, Project};
-    use crate::domain::values::{BlackLevel, Exposure, Saturation, Temperature};
+    use crate::domain::values::{BlackLevel, Exposure, Saturation, Scale, Temperature};
 
     #[test]
     fn transform_page_smoke() {
@@ -100,7 +100,7 @@ mod tests {
             crop_preset: None,
             output: None,
         };
-        let ctx = PipelineContext::from_page(&project, &page);
+        let ctx = PipelineContext::from_page(&project, &page, Scale::FULL);
 
         let result = transform_page(&ctx).unwrap();
         assert_eq!(result.width(), 64);
@@ -134,7 +134,7 @@ mod tests {
             crop_preset: None,
             output: Some(OutputSize { w: 32, h: 32 }),
         };
-        let ctx = PipelineContext::from_page(&project, &page);
+        let ctx = PipelineContext::from_page(&project, &page, Scale::FULL);
 
         let result = transform_page(&ctx).unwrap();
         assert_eq!(result.width(), 32);
@@ -175,7 +175,7 @@ mod tests {
                 h: 60,
             },
         );
-        let ctx = PipelineContext::from_page(&project, &page);
+        let ctx = PipelineContext::from_page(&project, &page, Scale::FULL);
 
         let (img, insets, expanded) = transform_page_bleed(&ctx, 20).unwrap();
         assert_eq!(
@@ -206,7 +206,7 @@ mod tests {
                 h: 32,
             },
         );
-        let ctx = PipelineContext::from_page(&project, &page);
+        let ctx = PipelineContext::from_page(&project, &page, Scale::FULL);
 
         let (img, insets, _) = transform_page_bleed(&ctx, 0).unwrap();
         let plain = transform_page(&ctx).unwrap();
@@ -219,10 +219,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let img_path = write_test_image(tmp.path(), 200, 200);
 
-        let project = Project {
-            export_scale: crate::domain::values::Scale::new(0.5),
-            ..Project::default()
-        };
+        let project = Project::default();
         let page = page_with_crop(
             img_path,
             CropBox {
@@ -232,7 +229,7 @@ mod tests {
                 h: 100,
             },
         );
-        let ctx = PipelineContext::from_page(&project, &page);
+        let ctx = PipelineContext::from_page(&project, &page, Scale::new(0.5));
 
         let (img, insets, expanded) = transform_page_bleed(&ctx, 10).unwrap();
         assert_eq!(expanded, (120, 120));
@@ -262,7 +259,7 @@ mod tests {
                 },
             )
         };
-        let ctx = PipelineContext::from_page(&project, &page);
+        let ctx = PipelineContext::from_page(&project, &page, Scale::FULL);
 
         let (img, insets, expanded) = transform_page_bleed(&ctx, 10).unwrap();
         assert_eq!(expanded, (120, 120));

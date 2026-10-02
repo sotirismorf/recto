@@ -37,6 +37,10 @@ pub enum ExportSettings {
         quality: JpegQuality,
         #[serde(default)]
         page_height_mm: u32,
+        /// Derive the page height from the first page's camera EXIF data
+        /// instead of `page_height_mm` (which remains the fallback).
+        #[serde(default)]
+        estimate_page_height: bool,
     },
 }
 

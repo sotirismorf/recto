@@ -17,6 +17,7 @@ pub use domain::values::{
     Bleed, Brightness, Contrast, Dpi, JpegQuality, Rotation, Saturation, Scale,
 };
 pub use export::{export_to_pdf, run_batch};
+pub use io::camera::{estimate_page_height_mm, CameraGeometry};
 pub use io::config::{load_config, save_config, AppConfig, PdfMeta};
 pub use io::project::{load_project, save_project};
 pub use transform::PipelineContext;

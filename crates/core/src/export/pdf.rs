@@ -65,6 +65,19 @@ where
     let n = pages.len();
 
     let page_height_mm = match project.export {
+        ExportSettings::Pdf {
+            page_height_mm,
+            estimate_page_height: true,
+            ..
+        } => project
+            .pages
+            .first()
+            .and_then(io::estimate_page_height_mm)
+            .map(|mm| mm.round() as u32)
+            .unwrap_or_else(|| {
+                tracing::warn!("cannot estimate page height from EXIF; using {page_height_mm} mm");
+                page_height_mm
+            }),
         ExportSettings::Pdf { page_height_mm, .. } => page_height_mm,
         _ => 0,
     };

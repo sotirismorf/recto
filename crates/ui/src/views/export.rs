@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -13,6 +13,26 @@ use recto_core::{load_config, save_config};
 use recto_core::{
     AppConfig, AppEvent, Command, ExportSettings, JpegQuality, PdfCompression, PdfMeta, Scale,
 };
+
+/// Build PDF export settings from the current state of the dialog widgets.
+fn pdf_settings(
+    pdf_enc_combo: &adw::ComboRow,
+    quality_adj: &gtk::Adjustment,
+    manual_height_mm: &Cell<u32>,
+    estimate_row: &adw::SwitchRow,
+) -> ExportSettings {
+    let compression = match pdf_enc_combo.selected() {
+        1 => PdfCompression::Flate,
+        2 => PdfCompression::Ccit,
+        _ => PdfCompression::Jpeg,
+    };
+    ExportSettings::Pdf {
+        compression,
+        quality: JpegQuality::new(quality_adj.value() as u8),
+        page_height_mm: manual_height_mm.get(),
+        estimate_page_height: estimate_row.is_active(),
+    }
+}
 
 enum ExportMsg {
     Progress(usize, usize),
@@ -193,6 +213,45 @@ fn build_export_content(
     page_height_row.set_title("Page height (mm)");
     page_height_row.set_subtitle("0 for original size");
 
+    // ---- Estimate page height SwitchRow (PDF only) -------------------------
+    let estimate = p
+        .pages
+        .first()
+        .and_then(recto_core::estimate_page_height_mm);
+    let estimate_row = adw::SwitchRow::builder()
+        .title("Estimate height from camera")
+        .subtitle(match estimate {
+            Some(mm) => format!("\u{2248} {mm:.0} mm, from the first page's EXIF focus data"),
+            None => "No usable camera data on the first page; page height is used".into(),
+        })
+        .active(matches!(
+            p.export,
+            ExportSettings::Pdf {
+                estimate_page_height: true,
+                ..
+            }
+        ))
+        .build();
+
+    // While the estimate is in use the spin row shows it and is locked; the
+    // user's own value is kept here so unchecking restores it and it stays
+    // the saved fallback.
+    let manual_height = Rc::new(Cell::new(page_height_adj.value() as u32));
+    let apply_estimate_lock = {
+        let page_height_adj = page_height_adj.clone();
+        let page_height_row = page_height_row.clone();
+        let manual_height = manual_height.clone();
+        move |active: bool| {
+            let shown = match estimate {
+                Some(mm) if active => mm.round(),
+                _ => manual_height.get() as f64,
+            };
+            page_height_row.set_sensitive(!(active && estimate.is_some()));
+            page_height_adj.set_value(shown);
+        }
+    };
+    apply_estimate_lock(estimate_row.is_active());
+
     // ---- PreferencesGroup containers ---------------------------------------
     let output_group = adw::PreferencesGroup::builder().title("Format").build();
     output_group.add(&format_combo);
@@ -207,6 +266,7 @@ fn build_export_content(
     quality_group.add(&png_comp_row);
     quality_group.add(&scale_row);
     quality_group.add(&page_height_row);
+    quality_group.add(&estimate_row);
 
     // ---- Export button + progress + result ----------------------------------
     let export_btn = gtk::Button::builder()
@@ -310,6 +370,7 @@ fn build_export_content(
         let quality_row = quality_row.clone();
         let png_comp_row = png_comp_row.clone();
         let page_height_row = page_height_row.clone();
+        let estimate_row = estimate_row.clone();
         move || {
             let pdf = is_pdf(&format_combo);
             pdf_enc_combo.set_visible(pdf);
@@ -320,6 +381,7 @@ fn build_export_content(
                 .set_visible(is_jpeg(&format_combo) || (pdf && pdf_enc_is_jpeg(&pdf_enc_combo)));
             png_comp_row.set_visible(is_png(&format_combo));
             page_height_row.set_visible(pdf);
+            estimate_row.set_visible(pdf);
         }
     };
     update_visibility();
@@ -332,8 +394,9 @@ fn build_export_content(
         let update = update_visibility.clone();
         let quality_adj = quality_adj.clone();
         let png_comp_adj = png_comp_adj.clone();
-        let page_height_adj = page_height_adj.clone();
+        let manual_height = manual_height.clone();
         let pdf_enc_combo = pdf_enc_combo.clone();
+        let estimate_row = estimate_row.clone();
         move |combo| {
             update();
             let idx = combo.selected();
@@ -345,19 +408,7 @@ fn build_export_content(
                     compression: png_comp_adj.value() as u8,
                 },
                 2 => ExportSettings::Tiff,
-                3 => {
-                    let enc = match pdf_enc_combo.selected() {
-                        0 => PdfCompression::Jpeg,
-                        1 => PdfCompression::Flate,
-                        2 => PdfCompression::Ccit,
-                        _ => PdfCompression::Jpeg,
-                    };
-                    ExportSettings::Pdf {
-                        compression: enc,
-                        quality: JpegQuality::new(quality_adj.value() as u8),
-                        page_height_mm: page_height_adj.value() as u32,
-                    }
-                }
+                3 => pdf_settings(&pdf_enc_combo, &quality_adj, &manual_height, &estimate_row),
                 _ => return,
             };
             state.dispatch(Command::SetExportSettings(settings));
@@ -369,20 +420,16 @@ fn build_export_content(
         let state = state.clone();
         let update = update_visibility.clone();
         let quality_adj = quality_adj.clone();
-        let page_height_adj = page_height_adj.clone();
+        let manual_height = manual_height.clone();
+        let estimate_row = estimate_row.clone();
         move |combo| {
             update();
-            let enc = match combo.selected() {
-                0 => PdfCompression::Jpeg,
-                1 => PdfCompression::Flate,
-                2 => PdfCompression::Ccit,
-                _ => return,
-            };
-            state.dispatch(Command::SetExportSettings(ExportSettings::Pdf {
-                compression: enc,
-                quality: JpegQuality::new(quality_adj.value() as u8),
-                page_height_mm: page_height_adj.value() as u32,
-            }));
+            state.dispatch(Command::SetExportSettings(pdf_settings(
+                combo,
+                &quality_adj,
+                &manual_height,
+                &estimate_row,
+            )));
         }
     });
 
@@ -391,7 +438,8 @@ fn build_export_content(
         let state = state.clone();
         let format_combo = format_combo.clone();
         let pdf_enc_combo = pdf_enc_combo.clone();
-        let page_height_adj = page_height_adj.clone();
+        let manual_height = manual_height.clone();
+        let estimate_row = estimate_row.clone();
         move |adj| {
             let q = JpegQuality::new(adj.value() as u8);
             if is_jpeg(&format_combo) {
@@ -399,11 +447,12 @@ fn build_export_content(
                     quality: q,
                 }));
             } else if is_pdf(&format_combo) && pdf_enc_is_jpeg(&pdf_enc_combo) {
-                state.dispatch(Command::SetExportSettings(ExportSettings::Pdf {
-                    compression: PdfCompression::Jpeg,
-                    quality: q,
-                    page_height_mm: page_height_adj.value() as u32,
-                }));
+                state.dispatch(Command::SetExportSettings(pdf_settings(
+                    &pdf_enc_combo,
+                    adj,
+                    &manual_height,
+                    &estimate_row,
+                )));
             }
         }
     });
@@ -434,18 +483,37 @@ fn build_export_content(
         let state = state.clone();
         let quality_adj = quality_adj.clone();
         let pdf_enc_combo = pdf_enc_combo.clone();
+        let estimate_row = estimate_row.clone();
+        let manual_height = manual_height.clone();
         move |adj| {
-            let enc = match pdf_enc_combo.selected() {
-                0 => PdfCompression::Jpeg,
-                1 => PdfCompression::Flate,
-                2 => PdfCompression::Ccit,
-                _ => PdfCompression::Jpeg,
-            };
-            state.dispatch(Command::SetExportSettings(ExportSettings::Pdf {
-                compression: enc,
-                quality: JpegQuality::new(quality_adj.value() as u8),
-                page_height_mm: adj.value() as u32,
-            }));
+            // Ignore the value written by the estimate lock.
+            if estimate_row.is_active() && estimate.is_some() {
+                return;
+            }
+            manual_height.set(adj.value() as u32);
+            state.dispatch(Command::SetExportSettings(pdf_settings(
+                &pdf_enc_combo,
+                &quality_adj,
+                &manual_height,
+                &estimate_row,
+            )));
+        }
+    });
+
+    // Estimate page height switch.
+    estimate_row.connect_active_notify({
+        let state = state.clone();
+        let quality_adj = quality_adj.clone();
+        let pdf_enc_combo = pdf_enc_combo.clone();
+        let manual_height = manual_height.clone();
+        move |row| {
+            apply_estimate_lock(row.is_active());
+            state.dispatch(Command::SetExportSettings(pdf_settings(
+                &pdf_enc_combo,
+                &quality_adj,
+                &manual_height,
+                row,
+            )));
         }
     });
 

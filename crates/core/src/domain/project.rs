@@ -3,7 +3,9 @@ use std::path::PathBuf;
 
 use crate::domain::crop::{CropBox, CropPreset};
 use crate::domain::export::{ExportSettings, OutputSize};
-use crate::domain::values::{Bleed, Brightness, Contrast, Rotation, Saturation, Scale};
+use crate::domain::values::{
+    BlackLevel, Bleed, Exposure, Rotation, Saturation, Scale, Temperature, Tint,
+};
 
 pub const CURRENT_SCHEMA: u32 = 1;
 
@@ -47,9 +49,13 @@ pub struct Project {
     pub output_dir: PathBuf,
     pub prefix: String,
     #[serde(default)]
-    pub brightness: Brightness,
+    pub exposure: Exposure,
     #[serde(default)]
-    pub contrast: Contrast,
+    pub black_level: BlackLevel,
+    #[serde(default)]
+    pub temperature: Temperature,
+    #[serde(default)]
+    pub tint: Tint,
     #[serde(default)]
     pub saturation: Saturation,
     #[serde(default)]
@@ -67,8 +73,10 @@ impl Default for Project {
             export: ExportSettings::default(),
             output_dir: PathBuf::new(),
             prefix: "page".into(),
-            brightness: Brightness::ZERO,
-            contrast: Contrast::ZERO,
+            exposure: Exposure::ZERO,
+            black_level: BlackLevel::ZERO,
+            temperature: Temperature::ZERO,
+            tint: Tint::ZERO,
             saturation: Saturation::ZERO,
             export_scale: Scale::FULL,
             bleed: Bleed::ZERO,

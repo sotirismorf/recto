@@ -5,7 +5,8 @@ use gtk::{gdk_pixbuf, glib};
 use image::DynamicImage;
 
 use crate::latest::RequestDedup;
-use recto_core::{Brightness, Contrast, CropBox, Project, Saturation};
+use recto_core::transform::color::ColorAdjust;
+use recto_core::{CropBox, Project};
 
 pub(crate) fn pixbuf_to_dynamic_image(pb: &gdk_pixbuf::Pixbuf) -> DynamicImage {
     let w = pb.width() as u32;
@@ -13,13 +14,16 @@ pub(crate) fn pixbuf_to_dynamic_image(pb: &gdk_pixbuf::Pixbuf) -> DynamicImage {
     let stride = pb.rowstride() as usize;
     let src = pb.read_pixel_bytes();
     let channels = if pb.has_alpha() { 4 } else { 3 };
-    let mut pixels = Vec::with_capacity(w as usize * h as usize * 3);
-    for row in 0..h {
-        for col in 0..w {
-            let si = row as usize * stride + col as usize * channels;
-            pixels.push(src[si]);
-            pixels.push(src[si + 1]);
-            pixels.push(src[si + 2]);
+    let row_len = w as usize * 3;
+    let mut pixels = Vec::with_capacity(row_len * h as usize);
+    for row in src.chunks(stride).take(h as usize) {
+        if channels == 3 {
+            // Rows are contiguous RGB apart from stride padding: copy whole rows.
+            pixels.extend_from_slice(&row[..row_len]);
+        } else {
+            for px in row[..w as usize * 4].as_chunks::<4>().0 {
+                pixels.extend_from_slice(&px[..3]);
+            }
         }
     }
     DynamicImage::ImageRgb8(image::RgbImage::from_raw(w, h, pixels).expect("valid rgb image"))
@@ -50,9 +54,7 @@ pub(crate) struct ColorReq {
     path: PathBuf,
     rotation: u32,
     crop: Option<CropBox>,
-    brightness: Brightness,
-    contrast: Contrast,
-    saturation: Saturation,
+    color: ColorAdjust,
 }
 
 /// Worker-side cache of the decoded, oriented, rotated, and cropped image.
@@ -106,9 +108,7 @@ pub(crate) fn send_preview_req(
         path: page.path.clone(),
         rotation: page.rotation.as_degrees() as u32,
         crop: page.crop,
-        brightness: project.brightness,
-        contrast: project.contrast,
-        saturation: project.saturation,
+        color: ColorAdjust::from_project(project),
     });
 }
 
@@ -135,8 +135,7 @@ pub(crate) fn render_preview(req: &ColorReq, cache: &mut BaseCache) -> Option<Co
             img
         }
     };
-    let img =
-        recto_core::transform::color::apply(base, req.brightness, req.contrast, req.saturation);
+    let img = recto_core::transform::color::apply(base, &req.color);
     let pb = dynamic_image_to_pixbuf(&img);
     Some(ColorResult {
         bytes: pb.read_pixel_bytes(),

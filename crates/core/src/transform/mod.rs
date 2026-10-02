@@ -45,7 +45,7 @@ pub fn transform_page_bleed(
         .output
         .map(|o| grow_output_for_bleed(o, insets, expanded_dims));
 
-    let img = color::apply(img, ctx.brightness, ctx.contrast, ctx.saturation);
+    let img = color::apply(img, &ctx.color);
     let img = resize::apply(img, output, ctx.scale);
     Ok((img, insets, expanded_dims))
 }
@@ -72,7 +72,7 @@ pub fn transform_page_preview(ctx: &PipelineContext) -> Result<DynamicImage> {
     let img = exif::correct_orientation(img, ctx.source_path);
     let img = rotate::apply(img, ctx.rotation);
     let img = crop::apply(img, ctx.crop);
-    let img = color::apply(img, ctx.brightness, ctx.contrast, ctx.saturation);
+    let img = color::apply(img, &ctx.color);
     Ok(img)
 }
 
@@ -82,7 +82,7 @@ mod tests {
     use crate::domain::crop::CropBox;
     use crate::domain::export::OutputSize;
     use crate::domain::project::{Page, Project};
-    use crate::domain::values::{Brightness, Contrast, Saturation};
+    use crate::domain::values::{BlackLevel, Exposure, Saturation, Temperature};
 
     #[test]
     fn transform_page_smoke() {
@@ -116,8 +116,9 @@ mod tests {
         test_img.save(&img_path).unwrap();
 
         let project = Project {
-            brightness: Brightness::MAX,
-            contrast: Contrast::MAX,
+            exposure: Exposure::MAX,
+            black_level: BlackLevel::MAX,
+            temperature: Temperature::MAX,
             saturation: Saturation::MAX,
             ..Project::default()
         };

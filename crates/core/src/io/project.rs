@@ -1,7 +1,9 @@
 use crate::domain::crop::CropPreset;
 use crate::domain::export::ExportSettings;
 use crate::domain::project::{Page, Project, CURRENT_SCHEMA};
-use crate::domain::values::{Bleed, Brightness, Contrast, Rotation, Saturation, Scale};
+use crate::domain::values::{
+    BlackLevel, Bleed, Exposure, Rotation, Saturation, Scale, Temperature, Tint,
+};
 use crate::error::{Error, Result};
 use crate::io;
 use serde::Serialize;
@@ -16,9 +18,13 @@ struct ProjectView<'a> {
     output_dir: &'a Path,
     prefix: &'a str,
     #[serde(default)]
-    brightness: Brightness,
+    exposure: Exposure,
     #[serde(default)]
-    contrast: Contrast,
+    black_level: BlackLevel,
+    #[serde(default)]
+    temperature: Temperature,
+    #[serde(default)]
+    tint: Tint,
     #[serde(default)]
     saturation: Saturation,
     #[serde(default)]
@@ -69,8 +75,10 @@ pub fn save_project(project: &Project, file_path: &Path) -> Result<()> {
         export: &project.export,
         output_dir: &project.output_dir,
         prefix: &project.prefix,
-        brightness: project.brightness,
-        contrast: project.contrast,
+        exposure: project.exposure,
+        black_level: project.black_level,
+        temperature: project.temperature,
+        tint: project.tint,
         saturation: project.saturation,
         export_scale: project.export_scale,
         bleed: project.bleed,
@@ -117,7 +125,7 @@ mod tests {
     use crate::domain::crop::{CropBox, CropPreset};
     use crate::domain::export::{ExportSettings, OutputSize};
     use crate::domain::project::Page;
-    use crate::domain::values::{Brightness, Contrast, JpegQuality, Saturation};
+    use crate::domain::values::JpegQuality;
 
     #[test]
     fn project_round_trip_save_load() {
@@ -151,8 +159,10 @@ mod tests {
             },
             output_dir: tmp.path().join("out"),
             prefix: "img".into(),
-            brightness: Brightness::MAX,
-            contrast: Contrast::MAX,
+            exposure: Exposure::new(-0.5),
+            black_level: BlackLevel::new(0.03),
+            temperature: Temperature::new(0.2),
+            tint: Tint::new(-0.1),
             saturation: Saturation::new(-0.5),
             export_scale: Scale::new(0.5),
             bleed: Bleed::new(24),
@@ -182,8 +192,10 @@ mod tests {
                 quality: JpegQuality::new(85),
             }
         );
-        assert_eq!(loaded.brightness, Brightness::MAX);
-        assert_eq!(loaded.contrast, Contrast::MAX);
+        assert_eq!(loaded.exposure, Exposure::new(-0.5));
+        assert_eq!(loaded.black_level, BlackLevel::new(0.03));
+        assert_eq!(loaded.temperature, Temperature::new(0.2));
+        assert_eq!(loaded.tint, Tint::new(-0.1));
         assert_eq!(loaded.saturation, Saturation::new(-0.5));
         assert_eq!(loaded.bleed, Bleed::new(24));
     }

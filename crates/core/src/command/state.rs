@@ -19,11 +19,11 @@ const MAX_UNDO: usize = 50;
 /// ```no_run
 /// use recto_core::command::{AppState, Command};
 /// use recto_core::domain::project::Project;
-/// use recto_core::domain::values::Brightness;
+/// use recto_core::domain::values::Exposure;
 ///
 /// let project = Project::default();
 /// let (state, _rx) = AppState::new(project);
-/// state.dispatch(Command::SetBrightness(Brightness::new(0.5)));
+/// state.dispatch(Command::SetExposure(Exposure::new(0.5)));
 /// ```
 pub struct AppState {
     project: RefCell<Project>,
@@ -236,13 +236,23 @@ impl AppState {
                 }
             }
 
-            Command::SetBrightness(val) => {
-                p.brightness = *val;
+            Command::SetExposure(val) => {
+                p.exposure = *val;
                 vec![AppEvent::GlobalSettingsChanged]
             }
 
-            Command::SetContrast(val) => {
-                p.contrast = *val;
+            Command::SetBlackLevel(val) => {
+                p.black_level = *val;
+                vec![AppEvent::GlobalSettingsChanged]
+            }
+
+            Command::SetTemperature(val) => {
+                p.temperature = *val;
+                vec![AppEvent::GlobalSettingsChanged]
+            }
+
+            Command::SetTint(val) => {
+                p.tint = *val;
                 vec![AppEvent::GlobalSettingsChanged]
             }
 
@@ -335,7 +345,7 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::values::{Bleed, Brightness, Rotation};
+    use crate::domain::values::{Bleed, Exposure, Rotation};
     use std::path::PathBuf;
 
     fn project_with_page() -> Project {
@@ -399,10 +409,10 @@ mod tests {
     }
 
     #[test]
-    fn set_brightness_clamps_to_range() {
+    fn set_exposure_clamps_to_range() {
         let (state, rx) = AppState::new(Project::default());
-        state.dispatch(Command::SetBrightness(Brightness::new(2.0)));
-        assert_eq!(state.project().brightness, Brightness::MAX);
+        state.dispatch(Command::SetExposure(Exposure::new(5.0)));
+        assert_eq!(state.project().exposure, Exposure::MAX);
         let event = rx.try_recv().unwrap();
         assert_eq!(event, AppEvent::GlobalSettingsChanged);
     }
@@ -467,7 +477,7 @@ mod tests {
     #[test]
     fn undo_emits_project_changed() {
         let (state, rx) = AppState::new(project_with_page());
-        state.dispatch(Command::SetBrightness(Brightness::new(0.3)));
+        state.dispatch(Command::SetExposure(Exposure::new(0.3)));
         let _ = rx.try_recv();
         assert!(state.undo());
         let event = rx.try_recv().unwrap();
@@ -482,7 +492,7 @@ mod tests {
             rotation: Rotation::DEG90,
         });
         assert!(state.undo());
-        state.dispatch(Command::SetBrightness(Brightness::new(0.1)));
+        state.dispatch(Command::SetExposure(Exposure::new(0.1)));
         assert!(!state.can_redo());
         assert!(!state.redo());
     }

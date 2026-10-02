@@ -10,4 +10,6 @@ pub use export::{ExportSettings, OutputSize, PdfCompression};
 pub use geometry::Rect;
 pub use order::{plan_move, MovePlan};
 pub use project::{Page, Project, CURRENT_SCHEMA};
-pub use values::{Brightness, Contrast, Dpi, JpegQuality, Rotation, Saturation, Scale};
+pub use values::{
+    BlackLevel, Dpi, Exposure, JpegQuality, Rotation, Saturation, Scale, Temperature, Tint,
+};

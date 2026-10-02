@@ -32,18 +32,19 @@ impl Default for Rotation {
     }
 }
 
-/// Brightness in [-1.0, 1.0]. Clamped at construction.
+/// Exposure in stops (EV) in [-2.0, 2.0]. Clamped at construction.
+/// A linear-light gain of 2^EV, like changing the camera exposure.
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct Brightness(f32);
+pub struct Exposure(f32);
 
-impl Brightness {
+impl Exposure {
     pub const ZERO: Self = Self(0.0);
-    pub const MIN: Self = Self(-1.0);
-    pub const MAX: Self = Self(1.0);
+    pub const MIN: Self = Self(-2.0);
+    pub const MAX: Self = Self(2.0);
 
     pub fn new(val: f32) -> Self {
-        Self(val.clamp(-1.0, 1.0))
+        Self(val.clamp(-2.0, 2.0))
     }
 
     pub fn as_f32(self) -> f32 {
@@ -51,18 +52,46 @@ impl Brightness {
     }
 }
 
-impl Default for Brightness {
+impl Default for Exposure {
     fn default() -> Self {
         Self::ZERO
     }
 }
 
-/// Contrast in [-1.0, 1.0]. Clamped at construction.
+/// Black level in [0.0, 0.15], a fraction of linear white. Clamped at
+/// construction. Subtracts a uniform veil of light (lens flare, glare off
+/// the paper) so ink regains its depth; pure white stays fixed.
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct Contrast(f32);
+pub struct BlackLevel(f32);
 
-impl Contrast {
+impl BlackLevel {
+    pub const ZERO: Self = Self(0.0);
+    pub const MIN: Self = Self(0.0);
+    pub const MAX: Self = Self(0.15);
+
+    pub fn new(val: f32) -> Self {
+        Self(val.clamp(0.0, 0.15))
+    }
+
+    pub fn as_f32(self) -> f32 {
+        self.0
+    }
+}
+
+impl Default for BlackLevel {
+    fn default() -> Self {
+        Self::ZERO
+    }
+}
+
+/// White-balance temperature in [-1.0, 1.0]. Clamped at construction.
+/// Negative = cooler (bluer), positive = warmer (yellower).
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Temperature(f32);
+
+impl Temperature {
     pub const ZERO: Self = Self(0.0);
     pub const MIN: Self = Self(-1.0);
     pub const MAX: Self = Self(1.0);
@@ -76,7 +105,33 @@ impl Contrast {
     }
 }
 
-impl Default for Contrast {
+impl Default for Temperature {
+    fn default() -> Self {
+        Self::ZERO
+    }
+}
+
+/// White-balance tint in [-1.0, 1.0]. Clamped at construction.
+/// Negative = greener, positive = more magenta.
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Tint(f32);
+
+impl Tint {
+    pub const ZERO: Self = Self(0.0);
+    pub const MIN: Self = Self(-1.0);
+    pub const MAX: Self = Self(1.0);
+
+    pub fn new(val: f32) -> Self {
+        Self(val.clamp(-1.0, 1.0))
+    }
+
+    pub fn as_f32(self) -> f32 {
+        self.0
+    }
+}
+
+impl Default for Tint {
     fn default() -> Self {
         Self::ZERO
     }
@@ -227,16 +282,22 @@ mod tests {
     }
 
     #[test]
-    fn brightness_clamps_to_range() {
-        assert_eq!(Brightness::new(2.0), Brightness::MAX);
-        assert_eq!(Brightness::new(-5.0), Brightness::MIN);
-        assert_eq!(Brightness::new(0.5), Brightness(0.5));
+    fn exposure_clamps_to_range() {
+        assert_eq!(Exposure::new(5.0), Exposure::MAX);
+        assert_eq!(Exposure::new(-5.0), Exposure::MIN);
+        assert_eq!(Exposure::new(0.5), Exposure(0.5));
     }
 
     #[test]
-    fn contrast_clamps_to_range() {
-        assert_eq!(Contrast::new(5.0), Contrast(1.0));
-        assert_eq!(Contrast::new(-3.0), Contrast(-1.0));
+    fn black_level_clamps_to_range() {
+        assert_eq!(BlackLevel::new(1.0), BlackLevel::MAX);
+        assert_eq!(BlackLevel::new(-0.1), BlackLevel::ZERO);
+    }
+
+    #[test]
+    fn white_balance_clamps_to_range() {
+        assert_eq!(Temperature::new(2.0), Temperature::MAX);
+        assert_eq!(Tint::new(-2.0), Tint::MIN);
     }
 
     #[test]

@@ -14,7 +14,7 @@ pub use domain::geometry::Rect;
 pub use domain::order::{plan_move, MovePlan};
 pub use domain::project::{Page, Project};
 pub use domain::values::{
-    Bleed, Brightness, Contrast, Dpi, JpegQuality, Rotation, Saturation, Scale,
+    BlackLevel, Bleed, Dpi, Exposure, JpegQuality, Rotation, Saturation, Scale, Temperature, Tint,
 };
 pub use export::{export_to_pdf, run_batch};
 pub use io::camera::{estimate_page_height_mm, CameraGeometry};

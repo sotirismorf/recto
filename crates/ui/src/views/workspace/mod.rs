@@ -34,6 +34,9 @@ use color::ColorView;
 use crop::CropView;
 use helpers::make_mode_button;
 
+/// Width the thumbnail grid starts at: about two columns.
+const INITIAL_GRID_WIDTH: i32 = 420;
+
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
     #[default]
@@ -121,6 +124,10 @@ pub fn build(
     let sidebar = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .width_request(180)
+        // Children like the colour sliders expand; without this their
+        // expansion propagates up and the sidebar takes a share of all extra
+        // window width.
+        .hexpand(false)
         .css_classes(["sidebar-pane"])
         .build();
     sidebar.append(&mode_buttons);
@@ -183,7 +190,6 @@ pub fn build(
         .orientation(gtk::Orientation::Horizontal)
         .start_child(&left_panel)
         .end_child(&grid_scroll)
-        .position(720)
         // Window resizes go to the preview; the thumbnail grid keeps the
         // width set by dragging the handle, down to one column.
         .resize_start_child(true)
@@ -192,6 +198,15 @@ pub fn build(
         .shrink_end_child(false)
         .vexpand(true)
         .build();
+    // Start the grid at about two columns, whatever the window size: the
+    // position is measured from the left, so it can only be set once the
+    // paned knows its width. Later window resizes go to the preview.
+    let initial_split = Cell::new(false);
+    paned.connect_max_position_notify(move |paned| {
+        if paned.width() > INITIAL_GRID_WIDTH && !initial_split.replace(true) {
+            paned.set_position(paned.width() - INITIAL_GRID_WIDTH);
+        }
+    });
     // Published here so the window's keyboard shortcuts reach them.
     paned.insert_action_group(REORDER_GROUP, Some(&ws.arrange.actions));
     paned.add_controller(file_drop_target(load_images));

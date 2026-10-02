@@ -399,6 +399,9 @@ pub fn build(
     preview_stack.set_visible_child_name("empty");
     preview_stack.set_vexpand(true);
     preview_stack.set_hexpand(true);
+    // Keep the preview usable; once it hits this width, further window
+    // shrinking comes out of the thumbnail grid (down to one column).
+    preview_stack.set_width_request(400);
 
     let left_panel = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -411,8 +414,10 @@ pub fn build(
         .orientation(gtk::Orientation::Horizontal)
         .start_child(&left_panel)
         .end_child(&grid_scroll)
-        .resize_start_child(false)
-        .resize_end_child(true)
+        // Window resizes go to the preview; the thumbnail grid keeps the
+        // width set by dragging the handle, down to one column.
+        .resize_start_child(true)
+        .resize_end_child(false)
         .shrink_start_child(false)
         .shrink_end_child(false)
         .vexpand(true)

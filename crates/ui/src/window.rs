@@ -141,6 +141,9 @@ pub fn build(app: &adw::Application, project_path: Option<PathBuf>) {
 
     let main_stack = gtk::Stack::new();
     main_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+    // Size to the visible page only, so the start page's minimum width
+    // doesn't stop the workspace from shrinking.
+    main_stack.set_hhomogeneous(false);
 
     // Show menu and switch to the work view.
     let enter_main = {

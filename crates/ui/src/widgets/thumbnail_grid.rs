@@ -65,8 +65,11 @@ pub fn install_grid_css() {
         //
         // `margin` stays on `child`: it is outside the border box, so it is
         // excluded from hit-testing and forms the gap that rubberbands.
+        // Neighbouring margins add up to 12px between cells; the grid's own
+        // padding brings the outer edge to the same 12px of grabbable gap.
         provider.load_from_string(
             "\
+            .photo-grid { padding: 6px; }\
             .photo-grid > child { margin: 6px; border-radius: 8px; }\
             .photo-card { padding: 8px; }\
             .photo-card.drop-before { box-shadow: inset 3px 0 0 0 @accent_bg_color; }\
@@ -209,8 +212,11 @@ pub fn build_grid_scroll(
         .hexpand(true)
         .build();
     grid_view.add_css_class("photo-grid");
+    // No horizontal scrolling: the scroller's minimum width becomes the
+    // grid's, i.e. one full column, so the panel can't be squeezed below it.
     let scroll = gtk::ScrolledWindow::builder()
         .child(&grid_view)
+        .hscrollbar_policy(gtk::PolicyType::Never)
         .vexpand(true)
         .hexpand(true)
         .build();

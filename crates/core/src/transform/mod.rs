@@ -4,4 +4,4 @@
 pub mod color;
 mod pipeline;
 
-pub use pipeline::{transform_page, transform_page_bleed, transform_page_preview, PipelineContext};
+pub use pipeline::{transform_page, transform_page_bleed, PipelineContext};

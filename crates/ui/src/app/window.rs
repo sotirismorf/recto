@@ -1,25 +1,12 @@
 use adw::prelude::*;
 use gtk::{gio, glib};
 use std::cell::{Cell, RefCell};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use super::actions;
 use super::session::{new_state, new_store, Session, State};
 use recto_core::{AppEvent, Command, Project};
-
-#[derive(Debug, thiserror::Error)]
-#[allow(dead_code)]
-pub enum AppError {
-    #[error("Failed to load project")]
-    ProjectLoad(#[source] anyhow::Error),
-
-    #[error("Failed to save project")]
-    ProjectSave(#[source] anyhow::Error),
-
-    #[error("Failed to export")]
-    Export(#[source] anyhow::Error),
-}
 
 thread_local! {
     static TOAST_OVERLAY: RefCell<Option<glib::WeakRef<adw::ToastOverlay>>> = const { RefCell::new(None) };
@@ -285,7 +272,7 @@ impl MainWindow {
             }
             Err(e) => {
                 tracing::error!("open project: {e}");
-                show_error_dialog(&self.window, &AppError::ProjectLoad(e.into()));
+                show_error_dialog(&self.window, "Failed to Open Project", &path, &e);
             }
         }
     }
@@ -305,7 +292,7 @@ impl MainWindow {
             }
             Err(e) => {
                 tracing::error!("save project: {e}");
-                show_toast("Failed to save project");
+                show_error_dialog(&self.window, "Failed to Save Project", &path, &e);
                 false
             }
         }
@@ -419,10 +406,65 @@ impl MainWindow {
     }
 }
 
-fn show_error_dialog(parent: &impl IsA<gtk::Widget>, err: &AppError) {
-    let dialog = adw::AlertDialog::new(Some("Error"), Some(&err.to_string()));
+/// `err` and each of its sources, outermost first, joined by ": ".
+pub fn error_chain(err: &dyn std::error::Error) -> String {
+    let mut text = err.to_string();
+    let mut source = err.source();
+    while let Some(cause) = source {
+        let cause_text = cause.to_string();
+        // Transparent wrappers repeat their source's message.
+        if !text.ends_with(&cause_text) {
+            text.push_str(": ");
+            text.push_str(&cause_text);
+        }
+        source = cause.source();
+    }
+    text
+}
+
+/// Report a failed file operation on `path`, with the full cause.
+fn show_error_dialog(
+    parent: &impl IsA<gtk::Widget>,
+    heading: &str,
+    path: &Path,
+    err: &dyn std::error::Error,
+) {
+    let body = format!("{}\n\n{}", path.display(), error_chain(err));
+    let dialog = adw::AlertDialog::new(Some(heading), Some(&body));
     dialog.add_response("ok", "OK");
     dialog.set_default_response(Some("ok"));
     dialog.set_close_response("ok");
     dialog.present(Some(parent));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::error_chain;
+
+    #[derive(Debug)]
+    struct Outer(std::io::Error);
+
+    impl std::fmt::Display for Outer {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("outer")
+        }
+    }
+
+    impl std::error::Error for Outer {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    #[test]
+    fn error_chain_includes_sources() {
+        let err = Outer(std::io::Error::other("disk full"));
+        assert_eq!(error_chain(&err), "outer: disk full");
+    }
+
+    #[test]
+    fn error_chain_skips_repeated_transparent_messages() {
+        let err = recto_core::error::Error::from(std::io::Error::other("disk full"));
+        assert_eq!(error_chain(&err), "disk full");
+    }
 }

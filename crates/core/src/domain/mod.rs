@@ -6,7 +6,7 @@ pub mod project;
 pub mod values;
 
 pub use crop::{CropBox, CropPreset};
-pub use export::{ExportSettings, ImageFormat, OutputSize, PdfCompression, PdfOptions};
+pub use export::{ExportSettings, ImageFormat, PdfCompression, PdfOptions};
 pub use geometry::Rect;
 pub use order::{plan_move, MovePlan};
 pub use project::{Page, Project, CURRENT_SCHEMA};

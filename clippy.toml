@@ -6,5 +6,5 @@ disallowed-methods = []
 # Relax some pedantic lints that are noisy in GTK/glib code
 allow-unwrap-in-tests = true
 
-# Minimum applicable lint levels
-# (enforced via `cargo clippy -- -D warnings` in CI)
+# Lint levels live in [workspace.lints] in Cargo.toml; `make check` (also
+# run by .github/workflows/check.yml) denies all warnings.

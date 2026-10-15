@@ -375,3 +375,40 @@ pub fn clamp_pan(px: f64, py: f64, z: f64, img_w: f64, img_h: f64, cw: f64, ch: 
     };
     (nx, ny)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_pan;
+
+    #[test]
+    fn smaller_image_is_centred() {
+        // 100x50 at zoom 1 in a 200x100 container: centred on both axes,
+        // whatever the requested pan.
+        assert_eq!(
+            clamp_pan(-500.0, 500.0, 1.0, 100.0, 50.0, 200.0, 100.0),
+            (50.0, 25.0)
+        );
+    }
+
+    #[test]
+    fn larger_image_edges_stay_outside_the_container() {
+        // 400x400 at zoom 1 in a 200x200 container: pan ranges over [-200, 0].
+        assert_eq!(
+            clamp_pan(50.0, -999.0, 1.0, 400.0, 400.0, 200.0, 200.0),
+            (0.0, -200.0)
+        );
+        assert_eq!(
+            clamp_pan(-120.0, -80.0, 1.0, 400.0, 400.0, 200.0, 200.0),
+            (-120.0, -80.0)
+        );
+    }
+
+    #[test]
+    fn zoom_scales_the_image_before_clamping() {
+        // 100x100 at zoom 4 is 400x400: same bounds as above.
+        assert_eq!(
+            clamp_pan(-999.0, 10.0, 4.0, 100.0, 100.0, 200.0, 200.0),
+            (-200.0, 0.0)
+        );
+    }
+}

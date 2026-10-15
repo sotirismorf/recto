@@ -529,7 +529,7 @@ fn build_export_content(
                             let msg = if matches!(e, Error::Cancelled) {
                                 "Cancelled".to_string()
                             } else {
-                                e.to_string()
+                                crate::app::error_chain(&e)
                             };
                             vec![(false, msg)]
                         }
@@ -561,7 +561,7 @@ fn build_export_content(
                                 let msg = if matches!(e, Error::Cancelled) {
                                     "Cancelled".to_string()
                                 } else {
-                                    e.to_string()
+                                    crate::app::error_chain(&e)
                                 };
                                 (false, msg)
                             }

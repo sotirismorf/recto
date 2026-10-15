@@ -54,7 +54,6 @@ pub fn load_project(file_path: &Path) -> Result<Project> {
 mod tests {
     use super::*;
     use crate::domain::crop::{CropBox, CropPreset};
-    use crate::domain::export::OutputSize;
     use crate::domain::project::Page;
     use crate::domain::values::{
         BlackLevel, Bleed, Exposure, Rotation, Saturation, Temperature, Tint,
@@ -79,7 +78,6 @@ mod tests {
                     h: 200,
                 }),
                 crop_preset: Some(0),
-                output: Some(OutputSize { w: 640, h: 480 }),
             }],
             crop_presets: vec![CropPreset {
                 name: "test".into(),

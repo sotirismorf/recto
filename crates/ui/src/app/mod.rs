@@ -6,4 +6,4 @@ mod session;
 mod window;
 
 pub use session::State;
-pub use window::{build, show_toast};
+pub use window::{build, error_chain, show_toast};

@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::domain::crop::{CropBox, CropPreset};
-use crate::domain::export::OutputSize;
 use crate::domain::values::{BlackLevel, Bleed, Exposure, Rotation, Saturation, Temperature, Tint};
 
 pub const CURRENT_SCHEMA: u32 = 1;
@@ -20,8 +19,6 @@ pub struct Page {
     pub crop: Option<CropBox>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crop_preset: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output: Option<OutputSize>,
 }
 
 impl Page {
@@ -31,7 +28,6 @@ impl Page {
             rotation: Rotation::ZERO,
             crop: None,
             crop_preset: None,
-            output: None,
         }
     }
 }

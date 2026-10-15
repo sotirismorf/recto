@@ -2,12 +2,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::values::JpegQuality;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OutputSize {
-    pub w: u32,
-    pub h: u32,
-}
-
 /// How page images are encoded inside an exported PDF.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

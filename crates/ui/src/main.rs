@@ -15,10 +15,6 @@ use std::rc::Rc;
 #[derive(Parser, Debug)]
 #[command(name = "recto", version)]
 struct Cli {
-    #[arg(long)]
-    project: Option<std::path::PathBuf>,
-    #[arg(long)]
-    headless: bool,
     /// A project file to open, or images to start a new project with
     /// (passed by the file manager when double-clicked)
     #[arg()]
@@ -33,17 +29,7 @@ fn main() -> glib::ExitCode {
         .init();
 
     let cli = Cli::parse();
-    if cli.headless {
-        tracing::info!(
-            "headless mode: not yet implemented (project={:?})",
-            cli.project
-        );
-        return glib::ExitCode::SUCCESS;
-    }
-
-    let mut initial = cli.files;
-    initial.extend(cli.project);
-    let initial_files = Rc::new(Cell::new(initial));
+    let initial_files = Rc::new(Cell::new(cli.files));
 
     let app = adw::Application::builder()
         .application_id("io.github.sotirismorf.Recto")

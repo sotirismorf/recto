@@ -1,5 +1,4 @@
 use gtk::{gdk, gdk_pixbuf, glib, prelude::*, subclass::prelude::*};
-use recto_core::Rotation;
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 
@@ -51,25 +50,9 @@ glib::wrapper! {
 }
 
 impl PageItem {
-    pub fn new(path: PathBuf, base: gdk_pixbuf::Pixbuf) -> Self {
-        let obj: Self = glib::Object::new();
-        obj.imp().stable_id.set(PageId::new());
-        {
-            let i = obj.imp();
-            *i.path.borrow_mut() = path.clone();
-            *i.base_pixbuf.borrow_mut() = Some(base.clone());
-        }
-        let texture = gdk::Texture::for_pixbuf(&base);
-        obj.set_thumbnail(Some(texture.upcast::<gdk::Paintable>()));
-        let name = path
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        obj.set_filename(name);
-        obj
-    }
-
-    pub fn new_placeholder(path: PathBuf) -> Self {
+    /// An item for the page at `path`; its thumbnail arrives later via
+    /// [`Self::set_image`].
+    pub fn new(path: PathBuf) -> Self {
         let obj: Self = glib::Object::new();
         obj.imp().stable_id.set(PageId::new());
         {
@@ -128,13 +111,5 @@ impl PageItem {
 
     pub fn path(&self) -> PathBuf {
         self.imp().path.borrow().clone()
-    }
-
-    pub fn rotation_value(&self) -> Rotation {
-        Rotation::new(self.rotation() as u16)
-    }
-
-    pub fn set_rotation_value(&self, r: Rotation) {
-        self.set_rotation_absolute(r.as_degrees() as u32);
     }
 }

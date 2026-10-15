@@ -266,15 +266,6 @@ impl AppState {
                 }
             }
 
-            Command::SetOutputSize { index, size } => {
-                if let Some(page) = p.pages.get_mut(*index) {
-                    page.output = *size;
-                    vec![AppEvent::PageChanged(*index)]
-                } else {
-                    vec![]
-                }
-            }
-
             Command::SetExposure(val) => {
                 p.exposure = *val;
                 vec![AppEvent::GlobalSettingsChanged]

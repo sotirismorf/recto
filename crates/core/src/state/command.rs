@@ -1,5 +1,4 @@
 use crate::domain::crop::{CropBox, CropPreset};
-use crate::domain::export::OutputSize;
 use crate::domain::values::{BlackLevel, Bleed, Exposure, Rotation, Saturation, Temperature, Tint};
 use std::path::PathBuf;
 
@@ -29,10 +28,6 @@ pub enum Command {
     SetCropPreset {
         index: usize,
         preset: Option<usize>,
-    },
-    SetOutputSize {
-        index: usize,
-        size: Option<OutputSize>,
     },
     SetExposure(Exposure),
     SetBlackLevel(BlackLevel),

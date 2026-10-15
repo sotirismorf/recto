@@ -88,3 +88,48 @@ impl PixelData {
         gdk::Texture::for_pixbuf(&self.to_pixbuf())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::background::color_preview::{dynamic_image_to_pixbuf, pixbuf_to_dynamic_image};
+    use image::{DynamicImage, RgbImage};
+
+    /// A 3x2 image whose pixels are all distinct, so any flip or turn shows.
+    fn sample() -> DynamicImage {
+        DynamicImage::ImageRgb8(RgbImage::from_fn(3, 2, |x, y| {
+            image::Rgb([x as u8 * 50, y as u8 * 100, 7])
+        }))
+    }
+
+    /// The display path must orient exactly like the export path, or crops
+    /// drawn on screen land elsewhere in the output.
+    #[test]
+    fn orient_matches_core_for_every_exif_orientation() {
+        for tag in 1..=8u16 {
+            let orientation = Orientation::from(tag);
+            let expected = orientation.apply(sample());
+            let shown =
+                pixbuf_to_dynamic_image(&orient(&dynamic_image_to_pixbuf(&sample()), orientation));
+            assert_eq!(
+                shown.to_rgb8(),
+                expected.to_rgb8(),
+                "EXIF orientation {tag} ({orientation:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn rotate_matches_core_rotation() {
+        for (deg, expected) in [
+            (0, sample()),
+            (90, sample().rotate90()),
+            (180, sample().rotate180()),
+            (270, sample().rotate270()),
+            (360, sample()),
+        ] {
+            let shown = pixbuf_to_dynamic_image(&rotate(&dynamic_image_to_pixbuf(&sample()), deg));
+            assert_eq!(shown.to_rgb8(), expected.to_rgb8(), "{deg} degrees");
+        }
+    }
+}

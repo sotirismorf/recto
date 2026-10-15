@@ -44,7 +44,7 @@ impl Default for PdfMeta {
 }
 
 /// Global application configuration persisted in the user's config directory.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
     pub export: ExportSettings,
@@ -52,16 +52,6 @@ pub struct AppConfig {
     pub export_scale: Scale,
     #[serde(default)]
     pub pdf_meta: PdfMeta,
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            export: ExportSettings::default(),
-            export_scale: Scale::default(),
-            pdf_meta: PdfMeta::default(),
-        }
-    }
 }
 
 fn config_path() -> Option<PathBuf> {

@@ -11,7 +11,7 @@ pub use domain::crop::{
     centered_crop, expand_crop, group_by_size, resize_crop, resize_crop_centered, BleedInsets,
     CropBox, CropPreset,
 };
-pub use domain::export::{ExportSettings, ImageFormat, OutputSize, PdfCompression, PdfOptions};
+pub use domain::export::{ExportSettings, ImageFormat, PdfCompression, PdfOptions};
 pub use domain::geometry::Rect;
 pub use domain::order::{plan_move, MovePlan};
 pub use domain::project::{Page, Project};

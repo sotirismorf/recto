@@ -11,7 +11,6 @@ authors = ["Sotiris Morfakidis"]
 description = "Recto — The powerful book scanning post-processor"
 
 [workspace.dependencies]
-anyhow = "1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -24,6 +23,23 @@ kamadak-exif = "0.6"
 tempfile = "3"
 pdf-writer = "0.14"
 dirs = "5"
+
+[workspace.lints.rust]
+rust_2018_idioms = { level = "warn", priority = -1 }
+unsafe_op_in_unsafe_fn = "warn"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+
+# The pixel code (colour, crops, export) is 5-10x slower unoptimised, which
+# makes debug builds painful on real scans. Debug info is kept.
+[profile.dev.package.recto-core]
+opt-level = 2
+
+[profile.dev.package."*"]
+opt-level = 2
 
 [profile.release]
 lto = "thin"

@@ -1,8 +1,7 @@
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::time::{Duration, Instant};
 
-use crate::command::event::AppEvent;
-use crate::command::Command;
+use super::{AppEvent, Command};
 use crate::domain::order::plan_move;
 use crate::domain::project::{Page, Project};
 
@@ -23,7 +22,7 @@ const COALESCE_WINDOW: Duration = Duration::from_secs(1);
 /// of one setting coalesce into one.
 ///
 /// ```no_run
-/// use recto_core::command::{AppState, Command};
+/// use recto_core::state::{AppState, Command};
 /// use recto_core::domain::project::Project;
 /// use recto_core::domain::values::Exposure;
 ///

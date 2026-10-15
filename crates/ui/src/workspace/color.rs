@@ -8,14 +8,14 @@ use gtk::glib;
 use gtk::prelude::*;
 
 use crate::app::State;
-use crate::latest::{PreviewService, RequestDedup};
+use crate::background::color_preview::{BaseCache, ColorReq};
+use crate::background::preview_service::{PreviewService, RequestDedup};
 use crate::pixbuf::PixelData;
-use crate::widgets::color_preview::{BaseCache, ColorReq};
 use crate::widgets::preview_canvas::PreviewCanvas;
 use crate::widgets::zoom_pan::ZoomPanController;
 use recto_core::{BlackLevel, Command, Exposure, Project, Saturation, Temperature, Tint};
 
-use super::helpers::{make_preview, make_section};
+use super::builders::{make_preview, make_section};
 use super::store::selected_positions;
 
 /// One colour adjustment and how its slider maps onto the project.
@@ -115,7 +115,7 @@ impl ColorView {
             // Lives on the single preview worker thread.
             let cache = RefCell::new(BaseCache::default());
             move |_id, req| {
-                crate::widgets::color_preview::render_preview(&req, &mut cache.borrow_mut())
+                crate::background::color_preview::render_preview(&req, &mut cache.borrow_mut())
             }
         });
 

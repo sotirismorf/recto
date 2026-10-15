@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::pixbuf::PixelData;
-use crate::types::PageId;
+use crate::widgets::page_item::PageId;
 
 pub struct ThumbReq {
     pub id: PageId,
@@ -31,7 +31,7 @@ pub enum LoadMsg {
 /// worker thread alive.  Drop it to shut down the worker and close the result
 /// channel.
 pub struct ThumbnailService {
-    job_queue: crate::worker::JobQueue,
+    job_queue: crate::background::job_queue::JobQueue,
     msg_tx: async_channel::Sender<LoadMsg>,
 }
 
@@ -40,7 +40,7 @@ impl ThumbnailService {
         let (msg_tx, msg_rx) = async_channel::unbounded();
         (
             Self {
-                job_queue: crate::worker::JobQueue::new(),
+                job_queue: crate::background::job_queue::JobQueue::new(),
                 msg_tx,
             },
             msg_rx,

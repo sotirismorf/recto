@@ -1,6 +1,6 @@
 use gtk::subclass::prelude::ObjectSubclassIsExt;
 use gtk::{gio, glib};
-use recto_core::command::{AppEvent, AppState};
+use recto_core::state::{AppEvent, AppState};
 use recto_core::Project;
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};

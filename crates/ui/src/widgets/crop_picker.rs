@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use crate::pixbuf::PixelData;
 
 use crate::app::State;
-use crate::latest::{PreviewService, RequestDedup};
+use crate::background::preview_service::{PreviewService, RequestDedup};
 use crate::widgets::preview_canvas::PreviewCanvas;
 use crate::widgets::zoom_pan::{ZoomPanConfig, ZoomPanController};
 

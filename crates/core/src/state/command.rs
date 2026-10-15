@@ -1,16 +1,10 @@
-pub mod event;
-pub mod state;
-
-pub use event::AppEvent;
-pub use state::AppState;
-
 use crate::domain::crop::{CropBox, CropPreset};
 use crate::domain::export::OutputSize;
 use crate::domain::values::{BlackLevel, Bleed, Exposure, Rotation, Saturation, Temperature, Tint};
 use std::path::PathBuf;
 
 /// Every mutation to the project is expressed as a [`Command`] and applied
-/// by [`AppState::dispatch`]. Undo is snapshot-based, so commands only need
+/// by [`AppState::dispatch`](super::AppState::dispatch). Undo is snapshot-based, so commands only need
 /// to describe the forward change.
 #[derive(Clone, Debug)]
 pub enum Command {

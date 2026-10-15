@@ -1,12 +1,15 @@
-//! Shared building blocks for the page-thumbnail grids used by the import,
-//! crop, and colors steps. Centralising this keeps card sizing, CSS, and
-//! property bindings consistent across the three views.
+//! The page thumbnail grid shared by every workspace mode: the card factory,
+//! the grid widget and its wiring to reordering and crop overlays.
 
-use std::sync::OnceLock;
-
+use gtk::glib;
 use gtk::prelude::*;
-use gtk::{gdk, glib};
 
+use std::rc::Rc;
+
+use recto_core::Command;
+
+use super::reorder::ReorderDnd;
+use super::{Mode, Workspace};
 use crate::widgets::page_item::PageItem;
 
 pub const THUMB_PX: i32 = 150;
@@ -42,45 +45,6 @@ fn unbind_props(item: &gtk::ListItem) {
             }
         }
     }
-}
-
-/// One-time install of the photo-grid CSS for cell margin/padding.
-pub fn install_grid_css() {
-    static ONCE: OnceLock<()> = OnceLock::new();
-    ONCE.get_or_init(|| {
-        let Some(display) = gdk::Display::default() else {
-            return;
-        };
-        let provider = gtk::CssProvider::new();
-        // The cell's inner padding belongs to `.photo-card`, not to the `child`
-        // node. Together with the card's Fill alignment (see `make_card`) that
-        // makes the card's allocation exactly the highlighted rounded
-        // rectangle, so every pixel a user reads as "the card" is a pixel the
-        // card's own gestures receive. Were the padding left on `child`, its
-        // ring would be part of the highlight but belong to the list item,
-        // where a press falls through to the grid's rubberband instead of
-        // starting a reorder.
-        //
-        // `margin` stays on `child`: it is outside the border box, so it is
-        // excluded from hit-testing and forms the gap that rubberbands.
-        // Neighbouring margins add up to 12px between cells; the grid's own
-        // padding brings the outer edge to the same 12px of grabbable gap.
-        provider.load_from_string(
-            "\
-            .photo-grid { padding: 6px; }\
-            .photo-grid > child { margin: 6px; border-radius: 8px; }\
-            .photo-card { padding: 8px; }\
-            .photo-card.drop-before { box-shadow: inset 3px 0 0 0 @accent_bg_color; }\
-            .photo-card.drop-after { box-shadow: inset -3px 0 0 0 @accent_bg_color; }\
-            .photo-card.dnd-source { opacity: 0.35; }\
-            ",
-        );
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
-    });
 }
 
 fn make_card() -> (gtk::Box, gtk::Image, gtk::Label) {
@@ -124,7 +88,7 @@ fn make_card() -> (gtk::Box, gtk::Image, gtk::Label) {
 /// with the card, its overlay and its list item: the place to attach event
 /// controllers and draw functions, which outlive binding. A draw function can
 /// find its page through `ListItem::item` / `ListItem::position`.
-pub fn page_grid_factory<S>(on_setup: S) -> gtk::SignalListItemFactory
+fn page_grid_factory<S>(on_setup: S) -> gtk::SignalListItemFactory
 where
     S: Fn(&gtk::Box, &gtk::DrawingArea, &gtk::ListItem) + 'static,
 {
@@ -187,11 +151,10 @@ where
 
 /// Build the GridView + ScrolledWindow used by all three steps. The selection
 /// model is supplied by the caller so multiple tabs can share one.
-pub fn build_grid_scroll(
+fn build_grid_scroll(
     selection: &gtk::MultiSelection,
     factory: &gtk::SignalListItemFactory,
 ) -> (gtk::GridView, gtk::ScrolledWindow) {
-    install_grid_css();
     let grid_view = gtk::GridView::builder()
         .model(selection)
         .factory(factory)
@@ -211,4 +174,54 @@ pub fn build_grid_scroll(
         .hexpand(true)
         .build();
     (grid_view, scroll)
+}
+
+impl Workspace {
+    /// The page thumbnail grid, shared by all modes. Reordering by drag
+    /// belongs to Arrange, so drags are gated on the mode.
+    pub(super) fn build_grid(self: &Rc<Self>) -> gtk::ScrolledWindow {
+        let reorder_dnd = ReorderDnd {
+            enabled: Rc::new({
+                let mode = self.mode.clone();
+                move || mode.get() == Mode::Arrange
+            }),
+            selection: self.selection.clone(),
+            on_move: Rc::new({
+                let state = self.state.clone();
+                move |indices, before| state.dispatch(Command::MovePages { indices, before })
+            }),
+        };
+        let factory = page_grid_factory({
+            let dnd = reorder_dnd.clone();
+            let crop = Rc::downgrade(&self.crop);
+            move |card, overlay, list_item| {
+                dnd.install_card(card, list_item);
+                if let Some(crop) = crop.upgrade() {
+                    crop.attach_thumb_overlay(overlay, list_item);
+                }
+            }
+        });
+        let (grid_view, grid_scroll) = build_grid_scroll(&self.selection, &factory);
+        reorder_dnd.install_grid(&grid_view, &grid_scroll);
+        reorder_dnd.install_background(&grid_scroll);
+
+        // A click on empty grid space clears the selection.
+        let click = gtk::GestureClick::new();
+        let selection = self.selection.clone();
+        click.connect_pressed(move |gesture, n_press, x, y| {
+            let on_background = gesture
+                .widget()
+                .and_then(|w| w.pick(x, y, gtk::PickFlags::DEFAULT))
+                .is_some_and(|target| {
+                    target.is::<gtk::GridView>()
+                        || target.is::<gtk::Viewport>()
+                        || target.is::<gtk::ScrolledWindow>()
+                });
+            if n_press == 1 && on_background {
+                selection.unselect_all();
+            }
+        });
+        grid_scroll.add_controller(click);
+        grid_scroll
+    }
 }

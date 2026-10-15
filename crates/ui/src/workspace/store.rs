@@ -11,9 +11,9 @@ use gtk::gio;
 use gtk::prelude::*;
 
 use crate::app::State;
-use crate::types::PageId;
+use crate::background::thumbnails::ThumbReq;
+use crate::widgets::page_item::PageId;
 use crate::widgets::page_item::PageItem;
-use crate::widgets::thumbnail_loader::ThumbReq;
 
 /// Grid positions of the selected pages, ascending. Positions equal project
 /// page indices because the store mirrors the project.

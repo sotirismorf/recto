@@ -21,7 +21,7 @@ use gtk::{gdk, glib};
 
 use crate::widgets::page_item::PageItem;
 
-/// CSS classes marking where a drop would land. See `install_grid_css`.
+/// CSS classes marking where a drop would land. See style.css.
 const DROP_BEFORE: &str = "drop-before";
 const DROP_AFTER: &str = "drop-after";
 const DRAG_SOURCE: &str = "dnd-source";
@@ -337,7 +337,7 @@ fn drag_icon(thumb: &gdk::Paintable) -> Option<gdk::Paintable> {
 
 /// Whether the point (in `root` coordinates) falls on a card — its padding
 /// included, its margin not, exactly the highlighted rounded rectangle (see
-/// the CSS notes in `thumbnail_grid`). The pick can land on a descendant
+/// the CSS notes in style.css). The pick can land on a descendant
 /// (image, label), so the card is searched for among ancestors, up to `root`.
 fn pick_is_card(root: &impl IsA<gtk::Widget>, x: f64, y: f64) -> bool {
     let root = root.as_ref();

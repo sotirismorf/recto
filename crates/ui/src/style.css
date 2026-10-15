@@ -1,0 +1,95 @@
+/* Application stylesheet, loaded once at startup (see main.rs). */
+
+/* ---- Start page ---------------------------------------------------------- */
+
+.drop-area {
+  background: transparent;
+  border: 2px dashed alpha(currentColor, 0.25);
+  border-radius: 12px;
+  padding: 8px;
+}
+.drop-area:hover {
+  border-color: alpha(@accent_color, 0.6);
+}
+.recto-title {
+  font-size: 36pt;
+  font-weight: 800;
+}
+
+/* ---- Workspace sidebar --------------------------------------------------- */
+
+.sidebar-pane { background: @sidebar_bg_color; }
+.mode-button { padding: 6px 10px; border-radius: 6px; }
+.mode-button:checked {
+  background: alpha(@accent_bg_color, 0.15);
+  color: @accent_color;
+  font-weight: 600;
+}
+.mode-button:checked:hover { background: alpha(@accent_bg_color, 0.22); }
+
+/* ---- Crop presets -------------------------------------------------------- */
+
+.preset-chip {
+  border-radius: 8px;
+  padding: 2px;
+}
+.preset-chip.preset-active {
+  outline: 2px solid @theme_selected_bg_color;
+  outline-offset: 1px;
+}
+.preset-label {
+  background: transparent;
+  color: white;
+  font-weight: bold;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  min-height: 24px;
+}
+.preset-label:hover {
+  opacity: 0.85;
+}
+.preset-lock, .preset-close {
+  background: transparent;
+  color: rgba(255,255,255,0.7);
+  border: none;
+  border-radius: 6px;
+  padding: 2px 4px;
+  min-height: 20px;
+  min-width: 20px;
+}
+.preset-lock:hover, .preset-close:hover {
+  background: rgba(255,255,255,0.15);
+  color: white;
+}
+.preset-c0 { background: #3584e4; }
+.preset-c1 { background: #33d17a; }
+.preset-c2 { background: #ff7800; }
+.preset-c3 { background: #9141ac; }
+.preset-c4 { background: #ed333b; }
+.preset-c5 { background: #1c71d8; }
+.preset-c6 { background: #c061cb; }
+.preset-c7 { background: #986a44; }
+
+/* ---- Thumbnail grid ------------------------------------------------------ */
+
+/* The cell's inner padding belongs to .photo-card, not to the child node.
+ * Together with the card's Fill alignment (see make_card in
+ * workspace/grid.rs) that makes the card's allocation exactly the highlighted
+ * rounded rectangle, so every pixel a user reads as "the card" is a pixel the
+ * card's own gestures receive. Were the padding left on child, its ring would
+ * be part of the highlight but belong to the list item, where a press falls
+ * through to the grid's rubberband instead of starting a reorder.
+ *
+ * margin stays on child: it is outside the border box, so it is excluded
+ * from hit-testing and forms the gap that rubberbands. Neighbouring margins
+ * add up to 12px between cells; the grid's own padding brings the outer edge
+ * to the same 12px of grabbable gap. */
+.photo-grid { padding: 6px; }
+.photo-grid > child { margin: 6px; border-radius: 8px; }
+.photo-card { padding: 8px; }
+
+/* Drop position markers and the dragged card (workspace/reorder.rs). */
+.photo-card.drop-before { box-shadow: inset 3px 0 0 0 @accent_bg_color; }
+.photo-card.drop-after { box-shadow: inset -3px 0 0 0 @accent_bg_color; }
+.photo-card.dnd-source { opacity: 0.35; }

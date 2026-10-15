@@ -1,4 +1,4 @@
-/// Events emitted by [`AppState::dispatch`](crate::command::AppState::dispatch) after a command is applied.
+/// Events emitted by [`AppState::dispatch`](super::AppState::dispatch) after a command is applied.
 ///
 /// UI components subscribe to these instead of polling state.
 #[derive(Clone, Debug, PartialEq)]

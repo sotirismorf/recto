@@ -1,8 +1,4 @@
-pub mod color_preview;
 pub mod crop_picker;
-pub mod grid_reorder;
 pub mod page_item;
 pub mod preview_canvas;
-pub mod thumbnail_grid;
-pub mod thumbnail_loader;
 pub mod zoom_pan;

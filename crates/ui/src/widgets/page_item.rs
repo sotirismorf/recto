@@ -3,7 +3,18 @@ use recto_core::Rotation;
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 
-use crate::types::PageId;
+/// Identifies a page's item for the lifetime of the app, across reorders,
+/// so thumbnails loaded in the background find their item again.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct PageId(u64);
+
+impl PageId {
+    pub fn new() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
 
 mod imp {
     use super::*;

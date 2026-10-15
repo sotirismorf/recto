@@ -32,136 +32,67 @@ impl Default for Rotation {
     }
 }
 
-/// Exposure in stops (EV) in [-2.0, 2.0]. Clamped at construction.
-/// A linear-light gain of 2^EV, like changing the camera exposure.
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Exposure(f32);
+/// A colour setting stored as an `f32` clamped to `[min, max]` at
+/// construction, defaulting to zero (no change).
+macro_rules! clamped_f32 {
+    ($(#[$doc:meta])* $name:ident, $min:literal..=$max:literal) => {
+        $(#[$doc])*
+        #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(f32);
 
-impl Exposure {
-    pub const ZERO: Self = Self(0.0);
-    pub const MIN: Self = Self(-2.0);
-    pub const MAX: Self = Self(2.0);
+        impl $name {
+            pub const ZERO: Self = Self(0.0);
+            pub const MIN: Self = Self($min);
+            pub const MAX: Self = Self($max);
 
-    pub fn new(val: f32) -> Self {
-        Self(val.clamp(-2.0, 2.0))
-    }
+            pub fn new(val: f32) -> Self {
+                Self(val.clamp($min, $max))
+            }
 
-    pub fn as_f32(self) -> f32 {
-        self.0
-    }
+            pub fn as_f32(self) -> f32 {
+                self.0
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::ZERO
+            }
+        }
+    };
 }
 
-impl Default for Exposure {
-    fn default() -> Self {
-        Self::ZERO
-    }
-}
+clamped_f32!(
+    /// Exposure in stops (EV) in [-2.0, 2.0]. Clamped at construction.
+    /// A linear-light gain of 2^EV, like changing the camera exposure.
+    Exposure, -2.0..=2.0
+);
 
-/// Black level in [0.0, 0.15], a fraction of linear white. Clamped at
-/// construction. Subtracts a uniform veil of light (lens flare, glare off
-/// the paper) so ink regains its depth; pure white stays fixed.
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct BlackLevel(f32);
+clamped_f32!(
+    /// Black level in [0.0, 0.15], a fraction of linear white. Clamped at
+    /// construction. Subtracts a uniform veil of light (lens flare, glare off
+    /// the paper) so ink regains its depth; pure white stays fixed.
+    BlackLevel, 0.0..=0.15
+);
 
-impl BlackLevel {
-    pub const ZERO: Self = Self(0.0);
-    pub const MIN: Self = Self(0.0);
-    pub const MAX: Self = Self(0.15);
+clamped_f32!(
+    /// White-balance temperature in [-1.0, 1.0]. Clamped at construction.
+    /// Negative = cooler (bluer), positive = warmer (yellower).
+    Temperature, -1.0..=1.0
+);
 
-    pub fn new(val: f32) -> Self {
-        Self(val.clamp(0.0, 0.15))
-    }
+clamped_f32!(
+    /// White-balance tint in [-1.0, 1.0]. Clamped at construction.
+    /// Negative = greener, positive = more magenta.
+    Tint, -1.0..=1.0
+);
 
-    pub fn as_f32(self) -> f32 {
-        self.0
-    }
-}
-
-impl Default for BlackLevel {
-    fn default() -> Self {
-        Self::ZERO
-    }
-}
-
-/// White-balance temperature in [-1.0, 1.0]. Clamped at construction.
-/// Negative = cooler (bluer), positive = warmer (yellower).
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Temperature(f32);
-
-impl Temperature {
-    pub const ZERO: Self = Self(0.0);
-    pub const MIN: Self = Self(-1.0);
-    pub const MAX: Self = Self(1.0);
-
-    pub fn new(val: f32) -> Self {
-        Self(val.clamp(-1.0, 1.0))
-    }
-
-    pub fn as_f32(self) -> f32 {
-        self.0
-    }
-}
-
-impl Default for Temperature {
-    fn default() -> Self {
-        Self::ZERO
-    }
-}
-
-/// White-balance tint in [-1.0, 1.0]. Clamped at construction.
-/// Negative = greener, positive = more magenta.
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Tint(f32);
-
-impl Tint {
-    pub const ZERO: Self = Self(0.0);
-    pub const MIN: Self = Self(-1.0);
-    pub const MAX: Self = Self(1.0);
-
-    pub fn new(val: f32) -> Self {
-        Self(val.clamp(-1.0, 1.0))
-    }
-
-    pub fn as_f32(self) -> f32 {
-        self.0
-    }
-}
-
-impl Default for Tint {
-    fn default() -> Self {
-        Self::ZERO
-    }
-}
-
-/// Saturation in [-1.0, 1.0]. Clamped at construction.
-/// -1.0 = fully desaturated (grayscale), 0.0 = unchanged, 1.0 = doubly saturated.
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Saturation(f32);
-
-impl Saturation {
-    pub const ZERO: Self = Self(0.0);
-    pub const MIN: Self = Self(-1.0);
-    pub const MAX: Self = Self(1.0);
-
-    pub fn new(val: f32) -> Self {
-        Self(val.clamp(-1.0, 1.0))
-    }
-
-    pub fn as_f32(self) -> f32 {
-        self.0
-    }
-}
-
-impl Default for Saturation {
-    fn default() -> Self {
-        Self::ZERO
-    }
-}
+clamped_f32!(
+    /// Saturation in [-1.0, 1.0]. Clamped at construction.
+    /// -1.0 = fully desaturated (grayscale), 0.0 = unchanged, 1.0 = doubly saturated.
+    Saturation, -1.0..=1.0
+);
 
 /// JPEG/PDF quality in [1, 100].
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -48,7 +48,7 @@ impl BleedInsets {
 
 /// Expand `crop` outward by `bleed` px on all sides, clamped to an
 /// `iw` x `ih` image. The crop is first clamped to the image the same way
-/// `transform::crop::apply` does, so both agree on geometry. Returns the
+/// the export pipeline's crop does, so both agree on geometry. Returns the
 /// expanded box and the actual per-side expansion after clamping.
 pub fn expand_crop(crop: CropBox, bleed: u32, iw: u32, ih: u32) -> (CropBox, BleedInsets) {
     let x = crop.x.min(iw.saturating_sub(1));

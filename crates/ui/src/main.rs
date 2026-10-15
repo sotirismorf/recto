@@ -1,15 +1,14 @@
 mod app;
-mod latest;
+mod background;
+mod dialogs;
 mod pixbuf;
-mod types;
-mod views;
+mod start_page;
 mod widgets;
-mod window;
-mod worker;
+mod workspace;
 
 use adw::prelude::*;
 use clap::Parser;
-use gtk::gio;
+use gtk::{gdk, gio};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -51,6 +50,8 @@ fn main() -> glib::ExitCode {
         .flags(gio::ApplicationFlags::HANDLES_OPEN)
         .build();
 
+    app.connect_startup(|_| load_css());
+
     app.connect_open(glib::clone!(
         #[strong]
         initial_files,
@@ -74,9 +75,20 @@ fn main() -> glib::ExitCode {
         #[strong]
         initial_files,
         move |app| {
-            window::build(app, initial_files.take());
+            app::build(app, initial_files.take());
         }
     ));
 
     app.run()
+}
+
+/// Install the app stylesheet for the whole display.
+fn load_css() {
+    let provider = gtk::CssProvider::new();
+    provider.load_from_string(include_str!("style.css"));
+    gtk::style_context_add_provider_for_display(
+        &gdk::Display::default().expect("display must be available"),
+        &provider,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
 }

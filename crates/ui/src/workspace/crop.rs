@@ -525,8 +525,8 @@ impl CropView {
                 Ok((results, clusters)) if !results.is_empty() => {
                     view.apply_detections(results, &clusters)
                 }
-                Ok(_) => crate::window::show_toast("Auto-detection failed: no pages detected"),
-                Err(_) => crate::window::show_toast("Auto-detection failed"),
+                Ok(_) => crate::app::show_toast("Auto-detection failed: no pages detected"),
+                Err(_) => crate::app::show_toast("Auto-detection failed"),
             }
         });
     }
@@ -582,7 +582,7 @@ impl CropView {
             }
         });
         let pages: usize = clusters.iter().map(|c| c.page_indices.len()).sum();
-        crate::window::show_toast(&format!(
+        crate::app::show_toast(&format!(
             "Detected {} preset{} across {} page{}",
             clusters.len(),
             if clusters.len() == 1 { "" } else { "s" },

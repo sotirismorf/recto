@@ -6,7 +6,7 @@ use std::rc::Rc;
 pub fn build(on_files: Rc<dyn Fn(Vec<PathBuf>)>, on_project: Rc<dyn Fn(PathBuf)>) -> gtk::Widget {
     // Render the SVG much larger than its display size so the GPU
     // downscales it cleanly instead of showing pixelated edges.
-    let logo_bytes = include_bytes!("../logo.svg");
+    let logo_bytes = include_bytes!("logo.svg");
     let stream = gio::MemoryInputStream::from_bytes(&glib::Bytes::from(&logo_bytes[..]));
     let pixbuf =
         gdk_pixbuf::Pixbuf::from_stream_at_scale(&stream, 1024, 1024, true, gio::Cancellable::NONE)
@@ -214,28 +214,6 @@ pub fn build(on_files: Rc<dyn Fn(Vec<PathBuf>)>, on_project: Rc<dyn Fn(PathBuf)>
         .build();
     row.append(&brand);
     row.append(&actions);
-
-    let provider = gtk::CssProvider::new();
-    provider.load_from_string(
-        ".drop-area { \
-             background: transparent; \
-             border: 2px dashed alpha(currentColor, 0.25); \
-             border-radius: 12px; \
-             padding: 8px; \
-         } \
-         .drop-area:hover { \
-             border-color: alpha(@accent_color, 0.6); \
-         } \
-         .recto-title { \
-             font-size: 36pt; \
-             font-weight: 800; \
-         }",
-    );
-    gtk::style_context_add_provider_for_display(
-        &gdk::Display::default().expect("display must be available"),
-        &provider,
-        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
 
     row.upcast()
 }

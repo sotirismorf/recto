@@ -9,13 +9,13 @@ use gtk::prelude::*;
 use gtk::{gio, glib};
 
 use crate::app::State;
-use crate::latest::{PreviewService, RequestDedup};
+use crate::background::preview_service::{PreviewService, RequestDedup};
 use crate::pixbuf::PixelData;
 use crate::widgets::preview_canvas::PreviewCanvas;
 use crate::widgets::zoom_pan::ZoomPanController;
 use recto_core::{Command, Rotation};
 
-use super::helpers::{make_preview, make_section};
+use super::builders::{make_preview, make_section};
 use super::store::selected_positions;
 
 /// Where a reorder action sends the selected pages.
@@ -58,7 +58,7 @@ const REORDER_BUTTONS: [(&str, &str, &str, MoveTarget); 4] = [
 ];
 
 /// Name of the action group the reorder actions are published under.
-pub const REORDER_GROUP: &str = "arrange";
+pub(super) const REORDER_GROUP: &str = "arrange";
 
 pub(super) struct ArrangeView {
     state: State,
@@ -321,7 +321,7 @@ impl ArrangeView {
         }
         let n = indices.len();
         self.state.dispatch(Command::RemovePages(indices));
-        crate::window::show_toast(&format!(
+        crate::app::show_toast(&format!(
             "Deleted {n} page{}",
             if n == 1 { "" } else { "s" }
         ));

@@ -7,7 +7,7 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 
 use crate::app::State;
-use crate::worker::JobQueue;
+use crate::background::job_queue::JobQueue;
 use recto_core::error::Error;
 use recto_core::{load_config, save_config};
 use recto_core::{

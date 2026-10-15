@@ -32,7 +32,7 @@ impl JobToken {
 /// the off-main-thread context.
 ///
 /// Every `std::thread::spawn` call for batch work should go through
-/// this type (preview work uses [`PreviewService`](crate::latest::PreviewService)).
+/// this type (preview work uses [`PreviewService`](crate::background::preview_service::PreviewService)).
 pub struct JobQueue {
     task_tx: Option<async_channel::Sender<Box<dyn FnOnce() + Send + 'static>>>,
     handle: Option<thread::JoinHandle<()>>,

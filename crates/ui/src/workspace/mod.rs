@@ -9,10 +9,11 @@
 //! forwards selection changes and project events to.
 
 mod arrange;
+mod builders;
 mod color;
 mod crop;
-mod css;
-mod helpers;
+mod grid;
+mod reorder;
 mod store;
 
 use std::cell::Cell;
@@ -23,16 +24,15 @@ use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 
 use crate::app::State;
-use crate::widgets::grid_reorder::ReorderDnd;
+use crate::background::thumbnails::{LoadMsg, ThumbReq, ThumbnailService};
 use crate::widgets::page_item::PageItem;
-use crate::widgets::thumbnail_loader::{LoadMsg, ThumbReq, ThumbnailService};
-use recto_core::{AppEvent, Command};
+use recto_core::AppEvent;
 
 use arrange::ArrangeView;
-pub use arrange::REORDER_GROUP;
+use arrange::REORDER_GROUP;
+use builders::make_mode_button;
 use color::ColorView;
 use crop::CropView;
-use helpers::make_mode_button;
 
 /// Width the thumbnail grid starts at: about two columns.
 const INITIAL_GRID_WIDTH: i32 = 420;
@@ -80,14 +80,11 @@ pub fn build(
     state: State,
     store: gio::ListStore,
     selection: gtk::MultiSelection,
-    spinner: gtk::Spinner,
-    count: gtk::Label,
     load_images: Rc<dyn Fn(Vec<PathBuf>)>,
     event_rx: async_channel::Receiver<AppEvent>,
 ) -> gtk::Widget {
-    css::load_sidebar_css();
-    css::load_preset_css();
-
+    let spinner = gtk::Spinner::builder().visible(false).build();
+    let count = gtk::Label::builder().label("0 images").build();
     let arrange = ArrangeView::new(
         state.clone(),
         selection.clone(),
@@ -207,8 +204,8 @@ pub fn build(
             paned.set_position(paned.width() - INITIAL_GRID_WIDTH);
         }
     });
-    // Published here so the window's keyboard shortcuts reach them.
     paned.insert_action_group(REORDER_GROUP, Some(&ws.arrange.actions));
+    paned.add_controller(reorder_shortcuts());
     paned.add_controller(file_drop_target(load_images));
 
     // ---- Wiring -------------------------------------------------------------
@@ -369,55 +366,27 @@ impl Workspace {
             }
         }
     }
+}
 
-    /// The page thumbnail grid, shared by all modes. Reordering by drag
-    /// belongs to Arrange, so drags are gated on the mode.
-    fn build_grid(self: &Rc<Self>) -> gtk::ScrolledWindow {
-        let reorder_dnd = ReorderDnd {
-            enabled: Rc::new({
-                let mode = self.mode.clone();
-                move || mode.get() == Mode::Arrange
-            }),
-            selection: self.selection.clone(),
-            on_move: Rc::new({
-                let state = self.state.clone();
-                move |indices, before| state.dispatch(Command::MovePages { indices, before })
-            }),
-        };
-        let factory = crate::widgets::thumbnail_grid::page_grid_factory({
-            let dnd = reorder_dnd.clone();
-            let crop = Rc::downgrade(&self.crop);
-            move |card, overlay, list_item| {
-                dnd.install_card(card, list_item);
-                if let Some(crop) = crop.upgrade() {
-                    crop.attach_thumb_overlay(overlay, list_item);
-                }
-            }
-        });
-        let (grid_view, grid_scroll) =
-            crate::widgets::thumbnail_grid::build_grid_scroll(&self.selection, &factory);
-        reorder_dnd.install_grid(&grid_view, &grid_scroll);
-        reorder_dnd.install_background(&grid_scroll);
-
-        // A click on empty grid space clears the selection.
-        let click = gtk::GestureClick::new();
-        let selection = self.selection.clone();
-        click.connect_pressed(move |gesture, n_press, x, y| {
-            let on_background = gesture
-                .widget()
-                .and_then(|w| w.pick(x, y, gtk::PickFlags::DEFAULT))
-                .is_some_and(|target| {
-                    target.is::<gtk::GridView>()
-                        || target.is::<gtk::Viewport>()
-                        || target.is::<gtk::ScrolledWindow>()
-                });
-            if n_press == 1 && on_background {
-                selection.unselect_all();
-            }
-        });
-        grid_scroll.add_controller(click);
-        grid_scroll
+/// Keyboard shortcuts for page reordering. They live on the workspace,
+/// where the reorder actions resolve; the actions are disabled whenever the
+/// move would be a no-op, so these are inert outside Arrange without needing
+/// a mode check here.
+fn reorder_shortcuts() -> gtk::ShortcutController {
+    let shortcuts = gtk::ShortcutController::new();
+    let ctrl_shift = gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::SHIFT_MASK;
+    for (key, action) in [
+        (gdk::Key::Left, "move-back"),
+        (gdk::Key::Right, "move-forward"),
+        (gdk::Key::Home, "move-start"),
+        (gdk::Key::End, "move-end"),
+    ] {
+        shortcuts.add_shortcut(gtk::Shortcut::new(
+            Some(gtk::KeyvalTrigger::new(key, ctrl_shift)),
+            Some(gtk::NamedAction::new(&format!("{REORDER_GROUP}.{action}"))),
+        ));
     }
+    shortcuts
 }
 
 /// Dropping image files anywhere on the workspace adds them as pages.

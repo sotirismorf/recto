@@ -18,8 +18,8 @@ kamadak-exif.workspace = true
 rayon.workspace = true
 tempfile.workspace = true
 pdf-writer.workspace = true
-miniz_oxide = "0.8"
+miniz_oxide = "0.9"
 dirs.workspace = true
 async-channel.workspace = true
 
-opencv = { version = "0.99", default-features = false, features = ["imgproc", "imgcodecs", "geometry"] }
+opencv = { version = "0.101", default-features = false, features = ["imgproc", "imgcodecs", "geometry"] }
